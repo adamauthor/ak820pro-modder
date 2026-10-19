@@ -86,6 +86,13 @@ impl TftMemory {
     /// because the user's primary command already succeeded.
     pub async fn restore_after_side_effect(self: &Arc<Self>) -> Result<bool, AppError> {
         let state = self.0.lock().await.clone();
+        // Legacy lighting was verified to preserve the current GIF. Its saved
+        // animation slot must not be rewritten as a side effect of a setting.
+        if ak820_protocol::enumerate()?.iter().any(|d| {
+            d.is_control && d.protocol == ak820_protocol::device::DeviceProtocol::LegacyFeature
+        }) {
+            return Ok(false);
+        }
         let Some(state) = state else {
             return Ok(false);
         };

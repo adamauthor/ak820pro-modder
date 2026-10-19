@@ -21,7 +21,9 @@
  */
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { useCapabilities } from "../capabilities";
+import type { DeviceInfo } from "../types";
+import { confirm, open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Badge, Button, Card, ErrorBanner } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { formatError } from "../errors";
@@ -45,6 +47,8 @@ function formatDuration(ms: number): string {
 }
 
 export function Tft() {
+  const caps = useCapabilities();
+  const legacy = caps?.protocol === "legacy_feature";
   const [presets, setPresets] = useState<TftPresetInfo[] | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -103,13 +107,26 @@ export function Tft() {
     }
   }
 
+  async function confirmLegacyUpload(): Promise<boolean | null> {
+    const devices = await invoke<DeviceInfo[]>("list_devices");
+    const legacy = devices.some((d) => d.is_tft && d.protocol === "legacy_feature");
+    if (!legacy) return false;
+    const accepted = await confirm(
+      "This keyboard uses the older screen protocol. Upload will replace the stored animation. If transfer fails, the previous animation may be lost and another upload may be needed. Continue?",
+      { title: "Replace TFT animation", kind: "warning" },
+    );
+    return accepted ? true : null;
+  }
+
   async function applyPreset() {
     if (!selected) return;
     setBusy(true);
     setErr(null);
     setInfo(null);
     try {
-      await invoke("apply_tft_preset", { id: selected });
+      const allowLegacy = await confirmLegacyUpload();
+      if (allowLegacy === null) return;
+      await invoke("apply_tft_preset", { id: selected, allowLegacy });
       const p = presets?.find((x) => x.id === selected);
       setInfo(
         p
@@ -142,7 +159,9 @@ export function Tft() {
         // User cancelled.
         return;
       }
-      await invoke("apply_tft_image", { path, fit });
+      const allowLegacy = await confirmLegacyUpload();
+      if (allowLegacy === null) return;
+      await invoke("apply_tft_image", { path, fit, allowLegacy });
       const name = path.split("/").pop() ?? path;
       setInfo(`Uploaded ${name} (fit: ${fit}). Watch the TFT.`);
     } catch (e) {
@@ -177,7 +196,7 @@ export function Tft() {
         }
         action={
           <div className="flex items-center gap-2">
-            <Button variant="ghost" onClick={() => void factoryDefault()} disabled={busy}>
+            <Button variant="ghost" onClick={() => void factoryDefault()} disabled={busy || legacy}>
               Factory Default
             </Button>
             {current && (
@@ -190,9 +209,10 @@ export function Tft() {
       />
 
       <ErrorBanner>{err}</ErrorBanner>
+      {legacy && <p className="mb-5 text-sm text-fg-2">Image/GIF upload is supported. Factory animation selection and live Now Playing are unavailable on this revision.</p>}
 
       <div className="grid gap-6">
-        <Card
+        {!legacy && <Card
           title={
             <span className="inline-flex items-center gap-2">
               <span>Now Playing</span>
@@ -224,7 +244,7 @@ export function Tft() {
               static preset or upload.
             </span>
           </div>
-        </Card>
+        </Card>}
 
         <Card
           title={

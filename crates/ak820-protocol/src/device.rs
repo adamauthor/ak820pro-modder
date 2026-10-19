@@ -15,11 +15,31 @@ use crate::protocol::{
 };
 use crate::{error::*, CONTROL_INTERFACE, PRODUCT_IDS, VENDOR_ID};
 
+/// Open vendor interfaces without seizing normal keyboard input on macOS.
+fn hid_api() -> Result<HidApi> {
+    let api = HidApi::new()?;
+    #[cfg(target_os = "macos")]
+    api.set_open_exclusive(false);
+    Ok(api)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceProtocol {
+    WebOutput,
+    LegacyFeature,
+}
+
+const CONTROL_PAGES: &[u16] = &[0xFF68, 0xFF80, 0xFF60, 0xFF00, 0xFF01, 0xFF1B];
+
 /// Default response timeout (ms) for non-streaming GET/SET commands.
 const DEFAULT_TIMEOUT_MS: i32 = 500;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
+    pub protocol: DeviceProtocol,
+    pub is_control: bool,
+    pub is_tft: bool,
     pub vid: u16,
     pub pid: u16,
     pub interface: i32,
@@ -53,13 +73,20 @@ pub struct InterfaceProbe {
 /// Open every AK820 candidate, read its report descriptor, and return a
 /// summary used by RE / interface-selection logic.
 ///
-/// **Caveat**: this acquires an exclusive HID handle for each interface in
-/// turn. Don't call it while the Tauri shell already holds a connection.
+/// macOS handles are non-exclusive. Only vendor endpoints are opened.
 pub fn probe_interfaces() -> Result<Vec<InterfaceProbe>> {
-    let api = HidApi::new()?;
+    let api = hid_api()?;
     let infos = enumerate()?;
     let mut out = Vec::with_capacity(infos.len());
     for info in infos {
+        if !(info.is_control || info.is_tft) {
+            out.push(InterfaceProbe {
+                info,
+                max_output_report_bytes: None,
+                raw_descriptor_hex: None,
+            });
+            continue;
+        }
         let opened = api.open_path(&std::ffi::CString::new(info.path.clone()).unwrap());
         let mut probe = InterfaceProbe {
             info: info.clone(),
@@ -147,13 +174,25 @@ fn parse_max_output_report_size(desc: &[u8]) -> Option<usize> {
 }
 
 pub fn enumerate() -> Result<Vec<DeviceInfo>> {
-    let api = HidApi::new()?;
+    let api = hid_api()?;
     let mut found = Vec::new();
     for d in api.device_list() {
         if d.vendor_id() != VENDOR_ID || !PRODUCT_IDS.contains(&d.product_id()) {
             continue;
         }
+        // Sonix IDs are shared by unrelated keyboards. Require the observed
+        // AK820 product name for the newly supported PID.
+        if d.product_id() == 0x800A
+            && !d
+                .product_string()
+                .is_some_and(|p| p.to_ascii_uppercase().starts_with("AK820"))
+        {
+            continue;
+        }
         let info = DeviceInfo {
+            protocol: DeviceProtocol::WebOutput,
+            is_control: false,
+            is_tft: false,
             vid: d.vendor_id(),
             pid: d.product_id(),
             interface: d.interface_number(),
@@ -167,8 +206,40 @@ pub fn enumerate() -> Result<Vec<DeviceInfo>> {
         debug!(?info, "candidate HID device");
         found.push(info);
     }
+    classify_candidates(&mut found);
     info!(count = found.len(), "enumerated AK820 candidates");
     Ok(found)
+}
+
+/// FF13 + FF68/4096 is the feature-report firmware, not the web-driver
+/// firmware whose FF68 is control and FF67 is a 4104-byte TFT endpoint.
+fn classify_candidates(found: &mut [DeviceInfo]) {
+    let legacy: Vec<_> = found
+        .iter()
+        .filter(|d| d.usage_page == 0xFF13)
+        .map(|d| (d.pid, d.product.clone()))
+        .collect();
+    let has_web_control = found.iter().any(|d| {
+        !legacy.contains(&(d.pid, d.product.clone())) && CONTROL_PAGES.contains(&d.usage_page)
+    });
+    for d in found {
+        d.protocol = if legacy.contains(&(d.pid, d.product.clone())) {
+            DeviceProtocol::LegacyFeature
+        } else {
+            DeviceProtocol::WebOutput
+        };
+        d.is_control = match d.protocol {
+            DeviceProtocol::LegacyFeature => d.usage_page == 0xFF13,
+            DeviceProtocol::WebOutput => {
+                CONTROL_PAGES.contains(&d.usage_page)
+                    || (!has_web_control && d.interface == CONTROL_INTERFACE)
+            }
+        };
+        d.is_tft = match d.protocol {
+            DeviceProtocol::LegacyFeature => d.usage_page == 0xFF68,
+            DeviceProtocol::WebOutput => d.usage_page == 0xFF67,
+        };
+    }
 }
 
 pub struct Connection {
@@ -180,7 +251,7 @@ impl Connection {
     /// Open the AK820 control endpoint. Selection precedence:
     ///   1. `AK820_IFACE=N` → first device with `interface_number == N`
     ///   2. `AK820_USAGE_PAGE=0xFFXX` → first device with that usage page
-    ///   3. default: vendor-specific usage page `0xFF67`
+    ///   3. default: profile-matched vendor control interface
     pub fn open_control() -> Result<Self> {
         let candidates = enumerate()?;
 
@@ -191,21 +262,25 @@ impl Connection {
             .ok()
             .and_then(|v| u16::from_str_radix(v.trim_start_matches("0x"), 16).ok());
 
-        // The official AJAZZ online driver filters collections by usage page —
-        // `q(x)` in the source accepts [0xFF68, 0xFF80, 0xFF60, 0xFF00, 0xFF01, 0xFF1B].
-        // On the AK820 Pro that's interface 2 (0xFF68), not interface 3 (0xFF67).
-        const PREFERRED_USAGE_PAGES: &[u16] = &[0xFF68, 0xFF80, 0xFF60, 0xFF00, 0xFF01, 0xFF1B];
-
+        let eligible: Vec<_> = candidates.iter().filter(|d| d.is_control).collect();
+        // Keep explicit diagnostic overrides for existing web-profile devices.
+        // Never permit them to select the legacy TFT as a control endpoint.
+        let override_eligible =
+            |d: &&DeviceInfo| d.protocol == DeviceProtocol::WebOutput || d.is_control;
         let pick = if let Some(want) = by_iface_env {
-            candidates.iter().find(|d| d.interface == want).cloned()
-        } else if let Some(want) = by_usage_env {
-            candidates.iter().find(|d| d.usage_page == want).cloned()
-        } else {
             candidates
                 .iter()
-                .find(|d| PREFERRED_USAGE_PAGES.contains(&d.usage_page))
-                .or_else(|| candidates.iter().find(|d| d.interface == CONTROL_INTERFACE))
+                .filter(override_eligible)
+                .find(|d| d.interface == want)
                 .cloned()
+        } else if let Some(want) = by_usage_env {
+            candidates
+                .iter()
+                .filter(override_eligible)
+                .find(|d| d.usage_page == want)
+                .cloned()
+        } else {
+            eligible.first().copied().cloned()
         };
 
         let control = pick.ok_or(Error::DeviceNotFound {
@@ -213,7 +288,7 @@ impl Connection {
             interface: CONTROL_INTERFACE,
         })?;
 
-        let api = HidApi::new()?;
+        let api = hid_api()?;
         let device = api.open_path(&std::ffi::CString::new(control.path.clone()).unwrap())?;
         device.set_blocking_mode(true)?;
         info!(
@@ -237,6 +312,15 @@ impl Connection {
     }
 
     pub fn probe(&self) -> Result<ProbeReport> {
+        if self.info.protocol == DeviceProtocol::LegacyFeature {
+            let _guard = crate::legacy::TransactionLock::acquire(self.info.pid)?;
+            let mut feature = [0u8; 65];
+            if self.device.get_feature_report(&mut feature)? != feature.len() {
+                return Err(Error::UnexpectedResponse(
+                    "Short legacy read-only feature report".into(),
+                ));
+            }
+        }
         Ok(ProbeReport {
             connected: true,
             interface: self.info.interface,
@@ -247,6 +331,9 @@ impl Connection {
 
     /// Send one output report on this interface.
     fn write_output_report(&self, frame: &[u8; PACKET_LEN]) -> Result<()> {
+        if self.info.protocol == DeviceProtocol::LegacyFeature {
+            return Err(Error::NotImplemented("This onboard operation is not decoded for feature-report firmware. Use the supported Lighting, System, TFT or Mac keyboard controls."));
+        }
         let mut buf = [0u8; PACKET_LEN + 1];
         buf[0] = REPORT_ID;
         buf[1..].copy_from_slice(frame);
@@ -460,6 +547,9 @@ impl Connection {
 
     /// Apply a complete lighting configuration.
     pub fn set_lighting(&self, cfg: &LightingConfig) -> Result<()> {
+        if self.info.protocol == DeviceProtocol::LegacyFeature {
+            return crate::legacy::set_lighting(&self.device, self.info.pid, cfg);
+        }
         let payload = lighting::led_effect_payload(cfg);
         let (r, g, b) = cfg.rgb();
         info!(
@@ -553,6 +643,11 @@ impl Connection {
     /// stores the active index in `_.value` (per-device runtime state) and
     /// passes whatever the UI's slot selector returned.
     pub fn set_tft_built_in_index(&self, index: u8) -> Result<()> {
+        if self.info.protocol == DeviceProtocol::LegacyFeature {
+            return Err(Error::NotImplemented(
+                "Built-in animation selection is not verified for legacy firmware",
+            ));
+        }
         info!(index, "SET_TFT_BUILT_IN_INDEX");
         self.set(cmd::SET_TFT_BUILT_IN_INDEX, &[index])
     }
@@ -564,26 +659,48 @@ impl Connection {
     /// inspecting the report descriptor with `probe_interfaces()` — the
     /// `0xFF67` collection advertises a 4104-byte output report).
     ///
-    /// Selection precedence: `AK820_TFT_USAGE_PAGE` env override, then the
-    /// fixed default `0xFF67`. Callers can hold both `open_control()` and
+    /// The feature-report profile instead uses FF13 for control and FF68
+    /// (4096-byte reports) for TFT. An override can narrow the selected role,
+    /// but cannot turn a keyboard or bootloader collection into a TFT endpoint.
+    /// Callers can hold both `open_control()` and
     /// `open_tft()` connections concurrently — they're separate HID handles.
     pub fn open_tft() -> Result<Self> {
         let candidates = enumerate()?;
-        let want_usage_page = std::env::var("AK820_TFT_USAGE_PAGE")
+        let override_page = std::env::var("AK820_TFT_USAGE_PAGE")
             .ok()
-            .and_then(|v| u16::from_str_radix(v.trim_start_matches("0x"), 16).ok())
-            .unwrap_or(0xFF67);
-        let pick = candidates
+            .and_then(|v| u16::from_str_radix(v.trim_start_matches("0x"), 16).ok());
+        let eligible: Vec<_> = candidates
             .iter()
-            .find(|d| d.usage_page == want_usage_page)
+            .filter(|d| d.is_tft && override_page.is_none_or(|p| p == d.usage_page))
+            .collect();
+        if eligible.len() > 1 {
+            return Err(Error::UnexpectedResponse(
+                "Multiple TFT devices connected; leave only the target AK820 connected".into(),
+            ));
+        }
+        let pick = eligible
+            .first()
+            .copied()
             .cloned()
             .ok_or(Error::DeviceNotFound {
                 vid: VENDOR_ID,
                 interface: -1,
             })?;
-        let api = HidApi::new()?;
+        let api = hid_api()?;
         let device = api.open_path(&std::ffi::CString::new(pick.path.clone()).unwrap())?;
         device.set_blocking_mode(true)?;
+        let mut desc = [0u8; 4096];
+        let n = device.get_report_descriptor(&mut desc)?;
+        let expected = if pick.protocol == DeviceProtocol::LegacyFeature {
+            4096
+        } else {
+            4104
+        };
+        if parse_max_output_report_size(&desc[..n]) != Some(expected) {
+            return Err(Error::UnexpectedResponse(format!(
+                "TFT descriptor does not declare the expected {expected}-byte output report"
+            )));
+        }
         info!(
             path = %pick.path,
             interface = pick.interface,
@@ -606,13 +723,27 @@ impl Connection {
     /// Must be called on a connection opened via `open_tft()` — the control
     /// interface's 64-byte report can't carry these chunks.
     pub fn upload_tft_animation(&self, anim: &TftAnimation) -> Result<()> {
+        self.upload_tft_animation_confirmed(anim, false)
+    }
+
+    /// The legacy protocol replaces the stored animation before data transfer.
+    /// Callers must obtain explicit consent before setting allow_legacy.
+    pub fn upload_tft_animation_confirmed(
+        &self,
+        anim: &TftAnimation,
+        allow_legacy: bool,
+    ) -> Result<()> {
+        if self.info.protocol == DeviceProtocol::LegacyFeature {
+            if !allow_legacy {
+                return Err(Error::NotImplemented("Legacy TFT upload needs confirmation: it replaces the stored animation. Use the TFT upload confirmation or CLI --allow-legacy."));
+            }
+            return crate::legacy_tft::upload_in_worker(&self.info, anim);
+        }
         // Sanity-check the interface — if we're on the wrong one the
         // hidapi write will quietly fail with a frame-too-long error on macOS.
-        if self.info.usage_page == 0xFF68 {
+        if !self.info.is_tft {
             return Err(Error::UnexpectedResponse(
-                "upload_tft_animation called on the 0xFF68 control interface; \
-                 use Connection::open_tft() to get the 0xFF67 4 KB-report interface"
-                    .into(),
+                "upload_tft_animation needs a TFT endpoint; use Connection::open_tft()".into(),
             ));
         }
 
@@ -674,6 +805,36 @@ impl Connection {
         self.set_many_at(cmd::SET_CUSTOM_LED_DATA, 0, &payload, true)
     }
 
+    /// Read the older firmware's battery status without synthesizing modern fields.
+    pub fn get_legacy_battery(&self) -> Result<crate::legacy::BatteryStatus> {
+        if self.info.protocol != DeviceProtocol::LegacyFeature {
+            return Err(Error::NotImplemented(
+                "Use get_device_info for web-output firmware",
+            ));
+        }
+        crate::legacy::battery(&self.device, self.info.pid)
+    }
+
+    /// Set a legacy sleep timer in minutes (0, 1, 5, 30). No read-back format is known.
+    pub fn set_legacy_sleep(&self, minutes: u8) -> Result<()> {
+        if self.info.protocol != DeviceProtocol::LegacyFeature {
+            return Err(Error::NotImplemented(
+                "Use set_game_mode for web-output firmware",
+            ));
+        }
+        crate::legacy::set_sleep(&self.device, self.info.pid, minutes)
+    }
+
+    /// Synchronize the older firmware clock to an explicitly supplied local time.
+    pub fn sync_legacy_clock(&self, now: time::OffsetDateTime) -> Result<()> {
+        if self.info.protocol != DeviceProtocol::LegacyFeature {
+            return Err(Error::NotImplemented(
+                "Clock sync is not decoded for web-output firmware",
+            ));
+        }
+        crate::legacy::sync_clock(&self.device, self.info.pid, now)
+    }
+
     /// Read the device-info struct (firmware, battery, profile, …).
     pub fn get_device_info(&self) -> Result<DeviceInfoReport> {
         let payload = self.get(cmd::GET_DEVICE_INFO, 48)?;
@@ -705,4 +866,79 @@ pub struct ProbeReport {
     pub interface: i32,
     pub product: Option<String>,
     pub firmware_version: Option<String>,
+}
+
+#[cfg(test)]
+mod detection_tests {
+    use super::*;
+
+    fn endpoint(page: u16) -> DeviceInfo {
+        DeviceInfo {
+            protocol: DeviceProtocol::WebOutput,
+            is_control: false,
+            is_tft: false,
+            vid: VENDOR_ID,
+            pid: 0x800A,
+            interface: -1,
+            usage_page: page,
+            usage: 1,
+            manufacturer: Some("SONiX".into()),
+            product: Some("AK820".into()),
+            serial: None,
+            path: format!("test:{page}"),
+        }
+    }
+
+    #[test]
+    fn ff13_changes_ff68_from_control_to_screen_role() {
+        let mut devices = vec![
+            endpoint(0x0001),
+            endpoint(0x000c),
+            endpoint(0xff68),
+            endpoint(0xff13),
+        ];
+        classify_candidates(&mut devices);
+        assert!(!devices[0].is_control && !devices[0].is_tft);
+        assert!(!devices[1].is_control && !devices[1].is_tft);
+        assert!(devices[2].is_tft && !devices[2].is_control);
+        assert!(devices[3].is_control && !devices[3].is_tft);
+        assert_eq!(devices[3].protocol, DeviceProtocol::LegacyFeature);
+    }
+
+    #[test]
+    fn web_firmware_keeps_original_endpoint_roles() {
+        let mut devices = vec![endpoint(0xff68), endpoint(0xff67)];
+        classify_candidates(&mut devices);
+        assert!(devices[0].is_control && !devices[0].is_tft);
+        assert!(devices[1].is_tft && !devices[1].is_control);
+        assert_eq!(devices[0].protocol, DeviceProtocol::WebOutput);
+        assert!(PRODUCT_IDS.contains(&0x800A));
+        assert!(!PRODUCT_IDS.contains(&0x7140));
+    }
+
+    #[test]
+    fn web_usage_pages_and_interface_fallback_preserve_existing_selection() {
+        for page in CONTROL_PAGES {
+            let mut devices = vec![endpoint(*page), endpoint(0xff67)];
+            classify_candidates(&mut devices);
+            assert!(devices[0].is_control);
+            assert!(!devices[1].is_control);
+        }
+        let mut fallback = endpoint(0xff99);
+        fallback.interface = CONTROL_INTERFACE;
+        let mut devices = vec![fallback];
+        classify_candidates(&mut devices);
+        assert!(devices[0].is_control);
+        devices.push(endpoint(0xff68));
+        classify_candidates(&mut devices);
+        assert!(!devices[0].is_control);
+        assert!(devices[1].is_control);
+    }
+    #[test]
+    fn hardware_screen_descriptor_is_4096_bytes_without_report_id() {
+        let desc =
+            hex::decode("0668ff0961a1010962150026ff009540750881020963150026ff0096001075089102c0")
+                .unwrap();
+        assert_eq!(parse_max_output_report_size(&desc), Some(4096));
+    }
 }

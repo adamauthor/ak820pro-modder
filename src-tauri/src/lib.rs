@@ -18,6 +18,7 @@ use tracing_subscriber::EnvFilter;
 #[cfg(target_os = "macos")]
 mod audio_reactive;
 mod automations;
+mod host_keyboard;
 mod icloud_sync;
 mod now_playing;
 mod now_playing_tft;
@@ -92,6 +93,29 @@ fn refresh_automation_shortcuts(app: &AppHandle) -> Result<(), String> {
         .map_err(|e| format!("on_shortcut({label}): {e}"))?;
         tracing::info!(automation_id, label, "registered global-shortcut marker");
     }
+    for m in host_keyboard::load(&app.path().app_data_dir().map_err(|e| e.to_string())?)?.macros {
+        if m.shortcut.trim().is_empty() {
+            continue;
+        }
+        let shortcut: Shortcut = m
+            .shortcut
+            .parse()
+            .map_err(|e| format!("Invalid Mac macro shortcut: {e}"))?;
+        if mgr.is_registered(shortcut) {
+            return Err(format!("Shortcut already used: {}", m.shortcut));
+        }
+        mgr.on_shortcut(shortcut, move |_, _, event| {
+            if event.state() == ShortcutState::Pressed {
+                let m = m.clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(error) = host_keyboard::play(m, false) {
+                        tracing::warn!(%error, "Mac macro failed");
+                    }
+                });
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -148,6 +172,85 @@ impl From<ak820_protocol::Error> for AppError {
     fn from(value: ak820_protocol::Error) -> Self {
         AppError::Protocol(value.to_string())
     }
+}
+
+#[tauri::command]
+fn host_keyboard_status() -> host_keyboard::Status {
+    host_keyboard::status()
+}
+#[tauri::command]
+fn host_macro_stop() {
+    host_keyboard::cancel();
+}
+#[tauri::command]
+async fn host_macro_run(app: AppHandle, id: u64) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let m = host_keyboard::load(&dir)?
+        .macros
+        .into_iter()
+        .find(|m| m.id == id)
+        .ok_or("Save this macro first")?;
+    tokio::task::spawn_blocking(move || host_keyboard::play(m, true))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn host_macros_load(app: AppHandle) -> Result<host_keyboard::Config, String> {
+    host_keyboard::load(&app.path().app_data_dir().map_err(|e| e.to_string())?)
+}
+#[tauri::command]
+fn host_macros_save(app: AppHandle, config: host_keyboard::Config) -> Result<(), String> {
+    host_keyboard::validate(&config)?;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let previous = host_keyboard::load(&dir)?;
+    // Validate shortcut syntax and marker conflicts before replacing any registrations.
+    let automation_shortcuts: Vec<Shortcut> = automations::load(dir.clone())?
+        .iter()
+        .filter_map(|a| a.marker_hid.and_then(hid_to_shortcut_label))
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    let mut shortcuts = Vec::new();
+    for m in &config.macros {
+        if m.shortcut.is_empty() {
+            continue;
+        }
+        let shortcut: Shortcut = m
+            .shortcut
+            .parse()
+            .map_err(|e| format!("Invalid shortcut: {e}"))?;
+        if shortcuts.contains(&shortcut) || automation_shortcuts.contains(&shortcut) {
+            return Err("Shortcut already used by another macro or automation".into());
+        }
+        shortcuts.push(shortcut);
+    }
+    host_keyboard::save(&dir, &config)?;
+    if let Err(error) = refresh_automation_shortcuts(&app) {
+        host_keyboard::save(&dir, &previous)?;
+        let _ = refresh_automation_shortcuts(&app);
+        return Err(error);
+    }
+    Ok(())
+}
+#[tauri::command]
+async fn host_remaps_get() -> Result<Vec<host_keyboard::Remap>, String> {
+    tokio::task::spawn_blocking(host_keyboard::get_remaps)
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+fn host_remaps_saved(app: AppHandle) -> Result<Vec<host_keyboard::Remap>, String> {
+    host_keyboard::saved_remaps(&app.path().app_data_dir().map_err(|e| e.to_string())?)
+}
+#[tauri::command]
+async fn host_remaps_apply(
+    app: AppHandle,
+    remaps: Vec<host_keyboard::Remap>,
+    restore: bool,
+) -> Result<Vec<host_keyboard::Remap>, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || host_keyboard::apply_remaps(&dir, remaps, restore))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Holds a single open control connection across calls so we don't
@@ -224,6 +327,57 @@ pub(crate) fn ensure_open(slot: &mut Option<Connection>) -> Result<&Connection, 
 }
 
 #[tauri::command]
+fn get_capabilities() -> Result<ak820_protocol::capabilities::DeviceCapabilities, AppError> {
+    let device = ak820_protocol::enumerate()?
+        .into_iter()
+        .find(|d| d.is_control)
+        .ok_or_else(|| AppError::Protocol("Keyboard is not connected".into()))?;
+    Ok(ak820_protocol::capabilities::DeviceCapabilities::for_protocol(device.protocol))
+}
+
+#[derive(Serialize)]
+struct LegacyStatus {
+    device: DeviceInfo,
+    battery: ak820_protocol::legacy::BatteryStatus,
+}
+
+#[tauri::command]
+async fn get_legacy_status(state: State<'_, Arc<ConnState>>) -> Result<LegacyStatus, AppError> {
+    state
+        .with(|slot| {
+            let connection = ensure_open(slot)?;
+            Ok(LegacyStatus {
+                device: connection.info().clone(),
+                battery: connection.get_legacy_battery()?,
+            })
+        })
+        .await
+}
+
+#[tauri::command]
+async fn set_legacy_sleep(state: State<'_, Arc<ConnState>>, minutes: u8) -> Result<(), AppError> {
+    state
+        .with(|slot| {
+            ensure_open(slot)?.set_legacy_sleep(minutes)?;
+            Ok(())
+        })
+        .await
+}
+
+#[tauri::command]
+async fn sync_legacy_clock(state: State<'_, Arc<ConnState>>) -> Result<(), AppError> {
+    let now = tokio::task::spawn_blocking(ak820_protocol::legacy::local_now)
+        .await
+        .map_err(|e| AppError::Protocol(format!("local time task: {e}")))??;
+    state
+        .with(|slot| {
+            ensure_open(slot)?.sync_legacy_clock(now)?;
+            Ok(())
+        })
+        .await
+}
+
+#[tauri::command]
 fn list_devices() -> Result<Vec<DeviceInfo>, AppError> {
     Ok(ak820_protocol::enumerate()?)
 }
@@ -233,27 +387,21 @@ fn list_devices() -> Result<Vec<DeviceInfo>, AppError> {
 /// loop would block view-level operations (lighting set / system reads).
 #[tauri::command]
 fn probe_device() -> Result<ProbeReport, AppError> {
-    const CONTROL_USAGE_PAGE: u16 = 0xFF68;
     let candidates = ak820_protocol::enumerate()?;
-    Ok(
-        match candidates
-            .iter()
-            .find(|d| d.usage_page == CONTROL_USAGE_PAGE)
-        {
-            Some(d) => ProbeReport {
-                connected: true,
-                interface: d.interface,
-                product: d.product.clone(),
-                firmware_version: None,
-            },
-            None => ProbeReport {
-                connected: false,
-                interface: -1,
-                product: None,
-                firmware_version: None,
-            },
+    Ok(match candidates.iter().find(|d| d.is_control) {
+        Some(d) => ProbeReport {
+            connected: true,
+            interface: d.interface,
+            product: d.product.clone(),
+            firmware_version: None,
         },
-    )
+        None => ProbeReport {
+            connected: false,
+            interface: -1,
+            product: None,
+            firmware_version: None,
+        },
+    })
 }
 
 #[tauri::command]
@@ -672,6 +820,15 @@ async fn apply_preset(
 ) -> Result<ApplyPresetReport, AppError> {
     let preset =
         presets::find(&id).ok_or_else(|| AppError::Protocol(format!("preset '{id}' not found")))?;
+    let capabilities = get_capabilities()?;
+    if (options.keymap && !capabilities.keymap && !preset.keymap_overrides.is_empty())
+        || (options.fn_keymap && !capabilities.fn_keymap && !preset.fn_keymap_overrides.is_empty())
+    {
+        return Err(AppError::Protocol(
+            "Onboard key remapping is not decoded for this firmware; no preset changes were sent"
+                .into(),
+        ));
+    }
     let mut report = ApplyPresetReport::default();
 
     // 1. Lighting — single SET_LED_EFFECT write, optional.
@@ -883,6 +1040,9 @@ async fn audio_reactive_start(
 ) -> Result<(), AppError> {
     let audio = audio.inner().clone();
     let conn = conn.inner().clone();
+    if !get_capabilities()?.audio_reactive {
+        return Err(AppError::Protocol("Audio-reactive lighting needs the per-key RGB protocol, which is not decoded for this firmware".into()));
+    }
     audio.start(conn).await
 }
 
@@ -1035,6 +1195,7 @@ async fn apply_tft_image(
     memory: State<'_, Arc<TftMemory>>,
     path: String,
     fit: String,
+    allow_legacy: bool,
 ) -> Result<(), AppError> {
     let bytes = tokio::task::spawn_blocking(move || std::fs::read(&path))
         .await
@@ -1054,7 +1215,8 @@ async fn apply_tft_image(
 
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let tft = Connection::open_tft().map_err(AppError::from)?;
-        tft.upload_tft_animation(&anim).map_err(AppError::from)?;
+        tft.upload_tft_animation_confirmed(&anim, allow_legacy)
+            .map_err(AppError::from)?;
         Ok(())
     })
     .await
@@ -1067,6 +1229,7 @@ async fn apply_tft_image(
 async fn apply_tft_preset(
     memory: State<'_, Arc<TftMemory>>,
     id: String,
+    allow_legacy: bool,
 ) -> Result<(), AppError> {
     // Build the animation off-thread — pixel generation for the busier
     // presets (scanline, checkerboard) does a ~half-megabyte of allocation
@@ -1082,7 +1245,8 @@ async fn apply_tft_preset(
     // tens of milliseconds for animated presets.
     tokio::task::spawn_blocking(move || -> Result<(), AppError> {
         let tft = Connection::open_tft().map_err(AppError::from)?;
-        tft.upload_tft_animation(&anim).map_err(AppError::from)?;
+        tft.upload_tft_animation_confirmed(&anim, allow_legacy)
+            .map_err(AppError::from)?;
         Ok(())
     })
     .await
@@ -1116,13 +1280,14 @@ async fn now_playing_tft_start(
 ) -> Result<(), AppError> {
     let state = state.inner().clone();
     let memory = memory.inner().clone();
+    if !get_capabilities()?.now_playing_tft {
+        return Err(AppError::Protocol("Live TFT refresh is unavailable on this firmware: every image upload rewrites saved screen content".into()));
+    }
     state.start(memory).await
 }
 
 #[tauri::command]
-async fn now_playing_tft_stop(
-    state: State<'_, Arc<NowPlayingTftState>>,
-) -> Result<(), AppError> {
+async fn now_playing_tft_stop(state: State<'_, Arc<NowPlayingTftState>>) -> Result<(), AppError> {
     state.stop().await;
     Ok(())
 }
@@ -1160,7 +1325,19 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            host_keyboard_status,
+            host_macro_stop,
+            host_macro_run,
+            host_macros_load,
+            host_macros_save,
+            host_remaps_get,
+            host_remaps_saved,
+            host_remaps_apply,
             list_devices,
+            get_capabilities,
+            get_legacy_status,
+            set_legacy_sleep,
+            sync_legacy_clock,
             probe_device,
             close_device,
             list_lighting_modes,
