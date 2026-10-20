@@ -37,7 +37,7 @@ struct YouTubePlayer {
     let button: AXUIElement
     let playing: Bool
 }
-func playerRoot(_ pid: pid_t) -> AXUIElement {
+func playerWindow(_ pid: pid_t) -> AXUIElement? {
     let root = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(root, 0.5)
     if let windows = axAttribute(root, kAXWindowsAttribute) as? [AXUIElement],
@@ -45,7 +45,10 @@ func playerRoot(_ pid: pid_t) -> AXUIElement {
         AXUIElementSetMessagingTimeout(window, 0.5)
         return window
     }
-    return root
+    return nil
+}
+func playerRoot(_ pid: pid_t) -> AXUIElement {
+    playerWindow(pid) ?? AXUIElementCreateApplication(pid)
 }
 func findPlayer(_ root: AXUIElement) -> YouTubePlayer? {
     guard let toolbar = axFind(root, where: { element in
@@ -88,13 +91,23 @@ func startLikedMusic(_ root: AXUIElement, canPress: () -> Bool = { true }) throw
     try pressAX(play)
 }
 
-func standardMediaKey() throws {
-    // This is the macOS Play/Pause media event, not a typing key or an Apple event.
-    for down in [true, false] {
-        let state = down ? 0x0a : 0x0b
-        guard let event = NSEvent.otherEvent(with: .systemDefined, location: .zero, modifierFlags: NSEvent.ModifierFlags(rawValue: UInt(state << 8)), timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0, context: nil, subtype: 8, data1: (16 << 16) | (state << 8), data2: -1)?.cgEvent else { throw MusicError.failed("Cannot create Play/Pause event") }
-        event.post(tap: .cghidEventTap)
+struct OtherPlayingPlayer {
+    let button: AXUIElement
+    let name: String
+}
+func otherPlayingPlayer() -> OtherPlayingPlayer? {
+    // Target only already-running music apps with an enabled Pause control.
+    // Audio-engine activity alone includes closed WebKit windows and alerts;
+    // it must never select the system's default media application.
+    for (bundle, name) in [("com.spotify.client", "Spotify"), ("com.apple.Music", "Music")] {
+        guard let application = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else { continue }
+        let root = playerRoot(application.processIdentifier)
+        if let pause = axFind(root, limit: 1200, seconds: 2, where: { element in
+            axRole(element) == kAXButtonRole && ["pause", "пауза"].contains(axName(element).lowercased()) &&
+            (axAttribute(element, kAXEnabledAttribute) as? NSNumber)?.boolValue != false
+        }) { return OtherPlayingPlayer(button: pause, name: name) }
     }
+    return nil
 }
 
 final class MusicController {
@@ -122,24 +135,24 @@ final class MusicController {
         let bundle = youtubeBundle
         worker.async { [self] in
             guard isCurrent(request) else { return }
-            let audioActive = try? outputIsActive()
             let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first
-            let current = app.flatMap { findPlayer(playerRoot($0.processIdentifier)) }
+            let current = app.flatMap { playerWindow($0.processIdentifier) }.flatMap { findPlayer($0) }
+            let audioActive = try? outputIsActive()
+            let other = current?.playing == true || audioActive == false ? nil : otherPlayingPlayer()
             do {
                 guard isCurrent(request) else { return }
-                switch musicAction(audioActive: audioActive, youtubePlaying: current?.playing == true) {
+                switch musicAction(audioActive: audioActive, youtubePlaying: current?.playing, otherPlayerPlaying: other != nil) {
                 case .pauseYouTube:
                     try pressAX(current!.button)
                     finish("Paused", request: request)
-                case .standardMediaKey:
-                    try standardMediaKey()
-                    finish("Active player: Play/Pause", request: request)
-                case .startYouTube:
-                    if let current {
-                        try pressAX(current.button)
-                        try confirmPlayback(playerRoot(app!.processIdentifier), request: request)
-                        finish("YouTube Music: playing", request: request)
-                    } else { launchAndPlay(bundle: bundle, request: request) }
+                case .pauseOtherPlayer:
+                    try pressAX(other!.button)
+                    finish("\(other!.name): paused", request: request)
+                case .resumeYouTube:
+                    try pressAX(current!.button)
+                    try confirmPlayback(playerRoot(app!.processIdentifier), request: request)
+                    finish("YouTube Music: playing", request: request)
+                case .startYouTube: launchAndPlay(bundle: bundle, request: request)
                 }
             } catch { finish("Error: \(error)", request: request) }
         }
@@ -169,7 +182,10 @@ final class MusicController {
                             // Safari web apps can replace their initial window while loading.
                             // Resolve both the process and the AX window again on each attempt.
                             let running = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first ?? application
-                            let root = playerRoot(running.processIdentifier)
+                            guard let root = playerWindow(running.processIdentifier) else {
+                                Thread.sleep(forTimeInterval: 0.75)
+                                continue
+                            }
                             if !forceLiked, let player = findPlayer(root) {
                                 if !player.playing { guard isCurrent(request) else { return }; try pressAX(player.button) }
                                 try confirmPlayback(root, request: request)
@@ -188,11 +204,9 @@ final class MusicController {
                     } catch { finish("Error: \(error)", request: request) }
                 }
             }
-            if let application = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first {
-                application.activate(options: [.activateAllWindows])
-                let root = AXUIElementCreateApplication(application.processIdentifier)
-                if let windows = axAttribute(root, kAXWindowsAttribute) as? [AXUIElement], !windows.isEmpty { ready(application, nil); return }
-            }
+            // Send Launch Services a reopen request even if the web-app process
+            // survived its red close button. Activating that process alone does
+            // not recreate a closed Safari web-app window.
             NSWorkspace.shared.openApplication(at: url, configuration: configuration, completionHandler: ready)
         }
     }

@@ -1427,9 +1427,14 @@ pub fn run() {
                 .item(&PredefinedMenuItem::hide(app, None)?)
                 .item(&PredefinedMenuItem::hide_others(app, None)?)
                 .item(&PredefinedMenuItem::show_all(app, None)?)
-                .separator()
-                .item(&PredefinedMenuItem::quit(app, None)?)
-                .build()?;
+                .separator();
+            #[cfg(target_os = "macos")]
+            let app_menu = app_menu
+                .item(&MenuItem::with_id(app, "close_to_menu_bar", "Close to menu bar", true, Some("CmdOrCtrl+Q"))?)
+                .item(&MenuItem::with_id(app, "stop_controls_quit", "Stop controls and quit", true, None::<&str>)?);
+            #[cfg(not(target_os = "macos"))]
+            let app_menu = app_menu.item(&PredefinedMenuItem::quit(app, None)?);
+            let app_menu = app_menu.build()?;
 
             let edit_menu = SubmenuBuilder::new(app, "Edit")
                 .item(&PredefinedMenuItem::undo(app, None)?)
@@ -1464,6 +1469,10 @@ pub fn run() {
             app.set_menu(menu)?;
 
             app.on_menu_event(|app, event| match event.id().as_ref() {
+                "close_to_menu_bar" => {
+                    if let Some(window) = app.get_webview_window("main") { let _ = window.hide(); }
+                }
+                "stop_controls_quit" => app.exit(0),
                 "reload" => {
                     if let Some(win) = app.get_webview_window("main") {
                         let _ = win.eval("location.reload()");

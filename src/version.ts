@@ -4,7 +4,7 @@
  * — keep them in lockstep.
  */
 
-export const APP_VERSION = "0.7.0-macos.1";
+export const APP_VERSION = "0.7.0-macos.2";
 export const APP_AUTHOR = "wsclx";
 export const APP_HOMEPAGE = "https://github.com/adamauthor/ak820pro-modder";
 

@@ -14,7 +14,7 @@ A clean replacement for the Windows-only AJAZZ tool — native, transparent, scr
 
 </div>
 
-## Unified macOS fork — 0.7.0-macos.1
+## Unified macOS fork — 0.7.0-macos.2
 
 This is [adamauthor's fork](https://github.com/adamauthor/ak820pro-modder) of
 [wsclx's AK820 Pro Modder](https://github.com/wsclx/ak820pro-modder), retaining the
@@ -25,15 +25,15 @@ Mac key mappings/macros, Bluetooth knob support, YouTube Music fallback and
 optional launch at login. All Mac controls run inside Modder; no separate
 music helper is needed.
 
-[Download the macOS release](https://github.com/adamauthor/ak820pro-modder/releases/tag/v0.7.0-macos.1)
+[Download the macOS release](https://github.com/adamauthor/ak820pro-modder/releases/tag/v0.7.0-macos.2)
 · [Mac controls setup and behavior](docs/MACOS-CONTROLS.md)
 · [FF13 hardware evidence and limits](docs/MACOS-800A.md)
 
 Open **Mac controls**, choose the knob action and save. If no player is active,
 the music action opens the installed Safari YouTube Music app and continues
 the last song; an empty queue starts **Liked Music**. Closing the window keeps
-controls and shortcuts running. The AK820 menu-bar item reopens it; Quit stops
-it. YouTube Music mode requires macOS 14.2+ and Accessibility for Modder.
+controls and shortcuts running without a Dock icon. ⌘Q also closes to the
+menu bar; reopen settings from AK820. **Stop controls and quit** fully exits. YouTube Music mode requires macOS 14.2+ and Accessibility for Modder.
 
 Known profiles: USB `0C45:800A` (`AK820`) and Bluetooth LE `0C45:FEFE`
 (`AK820 5.1-1`). Slots 2/3 have matching profiles but were not physically tested.
@@ -90,7 +90,7 @@ The web-output firmware features described elsewhere keep their existing path.
 
 ### Install (macOS)
 
-Download the Apple Silicon `.zip` from the [fork release](https://github.com/adamauthor/ak820pro-modder/releases/tag/v0.7.0-macos.1), unzip it and move **AK820 Pro Modder.app** to Applications. The release is ad-hoc signed and not notarized. Source builds also require Xcode Command Line Tools.
+Download the Apple Silicon `.zip` from the [fork release](https://github.com/adamauthor/ak820pro-modder/releases/tag/v0.7.0-macos.2), unzip it and move **AK820 Pro Modder.app** to Applications. The release is ad-hoc signed and not notarized. Source builds also require Xcode Command Line Tools.
 
 ```bash
 # Prerequisites: Rust toolchain from rust-toolchain.toml, Node.js 20+, pnpm

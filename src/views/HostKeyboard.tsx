@@ -104,7 +104,7 @@ export function HostMacros() {
   return <div className="space-y-5">
     <PageHeader title="Keyboard macros on this Mac" description="Record key presses, releases and delays. Stored in the app; runs while the app is open." />
     <p className="text-sm text-fg-2">Playback types into the foreground app using your Mac input language. Shortcuts work from any keyboard on this Mac. Use a shortcut such as Control+Alt+M, or leave it blank and use Run. Release the shortcut keys before playback. Fn, mouse actions and onboard macro storage are unavailable in this fallback.</p>
-    <p className="text-sm text-fg-2">Accessibility: {status?.accessibility ? "allowed" : "required for playback — enable AK820 Pro Modder in System Settings → Privacy & Security → Accessibility"}. After enabling Accessibility, quit and reopen the app once. Recording listens only inside the box below.</p>
+    <p className="text-sm text-fg-2">Accessibility: {status?.accessibility ? "allowed" : "required for playback — enable AK820 Pro Modder in System Settings → Privacy & Security → Accessibility"}. After enabling Accessibility, use Stop controls and quit in the AK820 menu, then reopen the app once. Recording listens only inside the box below.</p>
     {status?.running && <p role="status" className="text-sm text-fg-1">Macro playback is running. Stop playback cancels it.</p>}
     {error && <ErrorBanner>{error}</ErrorBanner>}
     {notice && <p role="status" className="text-sm text-fg-1">{notice}</p>}

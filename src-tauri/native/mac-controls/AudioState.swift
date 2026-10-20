@@ -35,10 +35,12 @@ func outputIsActive() throws -> Bool {
     return false
 }
 
-enum MusicAction: Equatable { case pauseYouTube, standardMediaKey, startYouTube }
-func musicAction(audioActive: Bool?, youtubePlaying: Bool) -> MusicAction {
-    if youtubePlaying { return .pauseYouTube }
-    // Unknown state preserves normal media-key behavior, avoiding a second player.
-    if audioActive != false { return .standardMediaKey }
+enum MusicAction: Equatable { case pauseYouTube, pauseOtherPlayer, resumeYouTube, startYouTube }
+func musicAction(audioActive: Bool?, youtubePlaying: Bool?, otherPlayerPlaying: Bool) -> MusicAction {
+    if youtubePlaying == true { return .pauseYouTube }
+    if otherPlayerPlaying && audioActive != false { return .pauseOtherPlayer }
+    if youtubePlaying == false { return .resumeYouTube }
+    // An absent YT window is not a paused system media session. Never send a
+    // generic media key here: macOS can launch Music for that stale session.
     return .startYouTube
 }

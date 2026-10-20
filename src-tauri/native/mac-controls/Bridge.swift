@@ -32,6 +32,7 @@ final class NativeControls: NSObject {
     var held = false
     let controller = MusicController()
     var statusItem: NSStatusItem?
+    var backgroundActivity: NSObjectProtocol?
 
     override init() {
         super.init()
@@ -39,6 +40,11 @@ final class NativeControls: NSObject {
     }
 
     func configure(_ request: [String: Any]) throws {
+        NSApp.setActivationPolicy(.accessory)
+        if backgroundActivity == nil {
+            backgroundActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep,
+                reason: "Respond to AK820 knob and macro shortcuts while the settings window is closed")
+        }
         if statusItem == nil {
             let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
             item.button?.title = "AK820"
@@ -47,7 +53,7 @@ final class NativeControls: NSObject {
             let open = NSMenuItem(title: "Open AK820 Pro Modder", action: #selector(openWindow), keyEquivalent: "")
             open.target = self; menu.addItem(open)
             menu.addItem(.separator())
-            let quit = NSMenuItem(title: "Quit AK820 Pro Modder", action: #selector(quitApplication), keyEquivalent: "")
+            let quit = NSMenuItem(title: "Stop controls and quit", action: #selector(quitApplication), keyEquivalent: "")
             quit.target = self; menu.addItem(quit)
             item.menu = menu; statusItem = item
         }
@@ -103,13 +109,13 @@ final class NativeControls: NSObject {
     func refresh() throws {
         guard let directory else { return }
         let trusted = AXIsProcessTrusted() && CGPreflightPostEventAccess()
-        let youtube = mode == "youtube_music" && trusted
+        let youtube = mode == "youtube_music"
         if youtube { try registerHotkey() }
         do { devices = try updateKnobMappings(target: mode == "original" ? nil : youtube ? triggerUsage : playUsage, directory: directory) }
         catch { if !youtube { unregisterHotkey() }; throw error }
         if !youtube { unregisterHotkey() }
         let needsAccess = mode == "youtube_music" && !trusted
-        if needsAccess { message = "Enable Accessibility for AK820 Pro Modder, then quit and reopen it" }
+        if needsAccess { message = "Enable Accessibility for AK820 Pro Modder, then Stop controls and quit from the AK820 menu and reopen it" }
         else if devices.isEmpty { message = "Waiting for AK820 over USB or Bluetooth" }
         else if mode == "original" { message = "Previous knob mapping restored" }
         else if lastError != nil || message.hasPrefix("Enable ") || message.hasPrefix("Waiting ") || message.hasPrefix("Previous ") || message.hasPrefix("Choose ") { message = "Ready — USB and Bluetooth" }
@@ -123,6 +129,8 @@ final class NativeControls: NSObject {
     func shutdown() throws {
         controller.cancel()
         timer?.invalidate(); timer = nil
+        if let backgroundActivity { ProcessInfo.processInfo.endActivity(backgroundActivity) }
+        backgroundActivity = nil
         defer { unregisterHotkey() }
         if let directory { _ = try updateKnobMappings(target: nil, directory: directory) }
     }
@@ -174,10 +182,13 @@ public func ak820MacControlsSelftest() -> Int32 {
         let custom: KeyMapping = [mappingSource: muteUsage, mappingDestination: playUsage]
         let (changed, backedUp) = try plannedMute([key, custom], owner: nil, target: triggerUsage)
         guard try plannedMute(changed, owner: backedUp, target: nil).0 == [key, custom] else { return 2 }
-        guard musicAction(audioActive: true, youtubePlaying: false) == .standardMediaKey,
-              musicAction(audioActive: false, youtubePlaying: false) == .startYouTube,
-              musicAction(audioActive: false, youtubePlaying: true) == .pauseYouTube,
-              musicAction(audioActive: nil, youtubePlaying: false) == .standardMediaKey else { return 3 }
+        guard musicAction(audioActive: true, youtubePlaying: nil, otherPlayerPlaying: false) == .startYouTube,
+              musicAction(audioActive: nil, youtubePlaying: nil, otherPlayerPlaying: false) == .startYouTube,
+              musicAction(audioActive: false, youtubePlaying: false, otherPlayerPlaying: false) == .resumeYouTube,
+              musicAction(audioActive: true, youtubePlaying: true, otherPlayerPlaying: false) == .pauseYouTube,
+              musicAction(audioActive: true, youtubePlaying: nil, otherPlayerPlaying: true) == .pauseOtherPlayer,
+              musicAction(audioActive: false, youtubePlaying: nil, otherPlayerPlaying: true) == .startYouTube,
+              musicAction(audioActive: true, youtubePlaying: true, otherPlayerPlaying: true) == .pauseYouTube else { return 3 }
         let valid: [String: Any] = ["CFBundleIdentifier": "com.apple.Safari.WebApp.test", "Manifest": ["start_url": "https://music.youtube.com/?source=pwa"]]
         guard isYouTubeManifest(valid), !isYouTubeManifest(["CFBundleIdentifier": "com.apple.Safari.WebApp.test", "Manifest": ["start_url": "https://music.youtube.com.evil.example/"]]) else { return 4 }
         do { _ = try plannedMute([custom], owner: MuteOwnership(original: nil, applied: triggerUsage), target: nil); return 5 }

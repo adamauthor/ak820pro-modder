@@ -48,7 +48,7 @@ export function MacControls() {
             <option value="youtube_music" disabled={!status.youtube_supported}>Play / pause, or start YouTube Music</option>
           </select>
         </label>
-        <p className="text-sm text-fg-2">If a player is active, click to pause. If nothing is playing, YouTube Music continues the last song; an empty queue starts Liked Music. Turning the knob still controls volume.</p>
+        <p className="text-sm text-fg-2">Click to pause or resume YouTube Music, even after closing its window. An empty queue starts Liked Music. Already-playing Music or Spotify can be paused directly. Turning the knob still controls volume.</p>
         {config.knob_mode === "youtube_music" && <>
           <label className="flex flex-wrap items-center gap-3 text-sm">YouTube Music
             <select aria-label="YouTube Music application" className={INPUT} value={config.youtube_app_id ?? status.youtube_app_id ?? ""} disabled={busy} onChange={e => change({ youtube_app_id: e.target.value || null })}>
@@ -57,7 +57,7 @@ export function MacControls() {
             </select>
           </label>
           {!status.youtube_apps.length && <p className="text-sm text-warn">Open music.youtube.com in Safari, choose File → Add to Dock, then Refresh here.</p>}
-          <p className="text-sm text-fg-2">Accessibility: {status.accessibility ? "allowed" : "enable AK820 Pro Modder in System Settings → Privacy & Security → Accessibility, then quit and reopen the app"}. Requires macOS 14.2 or later and the Safari YouTube Music web app.</p>
+          <p className="text-sm text-fg-2">Accessibility: {status.accessibility ? "allowed" : "enable AK820 Pro Modder in System Settings → Privacy & Security → Accessibility, then use Stop controls and quit in the AK820 menu, and reopen the app"}. Requires macOS 14.2 or later and the Safari YouTube Music web app.</p>
         </>}
         <label className="flex items-center gap-3 text-sm"><input type="checkbox" className="accent-accent-500" disabled={busy} checked={config.launch_at_login} onChange={e => change({ launch_at_login: e.target.checked })} />Launch at login</label>
         <div className="flex flex-wrap gap-2">
@@ -68,7 +68,7 @@ export function MacControls() {
         <p role="status" className="text-sm text-fg-1">{status.message}</p>
       </div>
     </Card>}
-    <p className="text-sm text-fg-2">Close the window to keep controls and shortcuts running. Use the AK820 menu-bar icon to reopen it, or Quit to stop. These settings are saved on your Mac.</p>
+    <p className="text-sm text-fg-2">Close the window or press ⌘Q to keep controls and shortcuts running in the menu bar, without a Dock icon. Reopen settings from AK820. To stop everything, choose Stop controls and quit in that menu. These settings are saved on your Mac.</p>
   </div>;
 }
 

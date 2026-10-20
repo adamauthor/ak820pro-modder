@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [0.7.0-macos.2] — Background controls and YouTube window recovery
+
+- Run as a menu-bar application without a Dock icon. Both the close button and
+  ⌘Q keep keyboard controls/macros running; Stop controls and quit fully exits.
+- Retain a background activity so App Nap does not suspend hidden-window input
+  handling, while still allowing system sleep.
+- Reopen a closed Safari YouTube Music window through Launch Services even if
+  its application process is still alive.
+- Remove untargeted media events from YouTube mode, including when Accessibility
+  is unavailable. Stale audio-engine activity can no longer launch Apple Music.
+- Control YT Music directly; pause other already-running Music/Spotify players
+  only through an identified, enabled Pause control.
+
 ## [0.7.0-macos.1] — Unified macOS fork
 
 - Integrate the Mac music-knob controller directly into the Tauri executable,
