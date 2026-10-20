@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 /**
  * TFT Display view (Phase 5c/5d).
  *
@@ -190,15 +191,13 @@ export function Tft() {
   return (
     <>
       <PageHeader
-        title="TFT Display"
+        title={t("TFT Display")}
         description={
           "Pick a preset, upload your own still / GIF, or restore the factory animation."
         }
         action={
           <div className="flex items-center gap-2">
-            <Button variant="ghost" onClick={() => void factoryDefault()} disabled={busy || legacy}>
-              Factory Default
-            </Button>
+            <Button variant="ghost" onClick={() => void factoryDefault()} disabled={busy || legacy}>{" "}{t("Factory Default")}{" "}</Button>
             {current && (
               <Button variant="primary" onClick={() => void applyPreset()} disabled={busy || !selected}>
                 {busy ? "Working…" : `Apply · ${current.display_name}`}
@@ -209,24 +208,19 @@ export function Tft() {
       />
 
       <ErrorBanner>{err}</ErrorBanner>
-      {legacy && <p className="mb-5 text-sm text-fg-2">Image/GIF upload is supported. Factory animation selection and live Now Playing are unavailable on this revision.</p>}
+      {legacy && <p className="mb-5 text-sm text-fg-2">{t("Image/GIF upload is supported. Factory animation selection and live Now Playing are unavailable on this revision.")}</p>}
 
       <div className="grid gap-6">
         {!legacy && <Card
           title={
             <span className="inline-flex items-center gap-2">
-              <span>Now Playing</span>
-              <Badge tone="neutral">Beta</Badge>
-              {nowPlayingRunning && <Badge tone="good">Streaming</Badge>}
+              <span>{t("Now Playing")}</span>
+              <Badge tone="neutral">{t("Beta")}</Badge>
+              {nowPlayingRunning && <Badge tone="good">{t("Streaming")}</Badge>}
             </span>
           }
         >
-          <p className="text-sm text-fg-2">
-            Bind the TFT panel to your current track. Polls Music.app and
-            Spotify desktop every 2 seconds; shows title, artist, album, and
-            source. macOS only. Track changes propagate within ~2 s; the
-            panel says <em>Nothing playing</em> when nothing is.
-          </p>
+          <p className="text-sm text-fg-2">{" "}{t("Bind the TFT panel to your current track. Polls Music.app and Spotify desktop every 2 seconds; shows title, artist, album, and source. macOS only. Track changes propagate within ~2 s; the panel says")}{" "}<em>{t("Nothing playing")}</em>{" "}{t("when nothing is.")}{" "}</p>
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <Button
               variant={nowPlayingRunning ? "ghost" : "primary"}
@@ -239,32 +233,24 @@ export function Tft() {
                   ? "Stop Now-Playing"
                   : "Start Now-Playing on TFT"}
             </Button>
-            <span className="text-xs text-fg-3">
-              Starts a host-side polling loop; stop to free the panel for a
-              static preset or upload.
-            </span>
+            <span className="text-xs text-fg-3">{" "}{t("Starts a host-side polling loop; stop to free the panel for a static preset or upload.")}{" "}</span>
           </div>
         </Card>}
 
         <Card
           title={
             <span className="inline-flex items-center gap-2">
-              <span>Custom image</span>
-              <Badge tone="neutral">Beta</Badge>
+              <span>{t("Custom image")}</span>
+              <Badge tone="neutral">{t("Beta")}</Badge>
             </span>
           }
         >
-          <p className="text-sm text-fg-2">
-            Pick a <code>.png</code>, <code>.jpg</code>, or <code>.gif</code> from disk —
-            it's decoded, resized to 128 × 128, quantised to RGB565, and uploaded.
-            GIFs become multi-frame animations (truncated to ≈ 30 frames; the
-            firmware's per-upload budget).
-          </p>
+          <p className="text-sm text-fg-2">{" "}{t("Pick a")}{" "}<code>.png</code>, <code>.jpg</code>{t(", or")}{" "}<code>.gif</code>{" "}{t("from disk — it's decoded, resized to 128 × 128, quantised to RGB565, and uploaded. GIFs become multi-frame animations (truncated to ≈ 30 frames; the firmware's per-upload budget).")}{" "}</p>
           <div className="mt-3 flex flex-wrap items-center gap-3">
             <Button variant="primary" onClick={() => void uploadImage()} disabled={busy}>
               {busy ? "Working…" : "Choose image…"}
             </Button>
-            <span className="text-xs uppercase tracking-wider text-fg-3">Fit:</span>
+            <span className="text-xs uppercase tracking-wider text-fg-3">{t("Fit:")}</span>
             <div className="inline-flex overflow-hidden rounded-md border border-line">
               {(["fill", "contain", "stretch"] as FitMode[]).map((mode) => (
                 <button
@@ -285,34 +271,22 @@ export function Tft() {
             </div>
           </div>
           <p className="mt-3 text-xs text-fg-3">
-            <strong>Fill</strong> = centre-crop to a square (edge-to-edge,
-            matches the AJAZZ web tool default). <strong>Contain</strong> =
-            letterbox with black bars to preserve the whole image.
-            <strong> Stretch</strong> = scale axes independently (only useful
-            if you've already cropped to a square).
-          </p>
+            <strong>{t("Fill")}</strong>{" "}{t("= centre-crop to a square (edge-to-edge, matches the AJAZZ web tool default).")}{" "}<strong>{t("Contain")}</strong>{" "}{t("= letterbox with black bars to preserve the whole image.")}{" "}<strong>{" "}{t("Stretch")}</strong>{" "}{t("= scale axes independently (only useful if you've already cropped to a square).")}{" "}</p>
         </Card>
 
         <Card
           title={
             <span className="inline-flex items-center gap-2">
-              <span>Presets</span>
-              <Badge tone="neutral">Beta</Badge>
+              <span>{t("Presets")}</span>
+              <Badge tone="neutral">{t("Beta")}</Badge>
             </span>
           }
         >
           {presets === null ? (
-            <p className="text-sm text-fg-3">Loading presets…</p>
+            <p className="text-sm text-fg-3">{t("Loading presets…")}</p>
           ) : (
             <>
-              <p className="text-sm text-fg-2">
-                12 generated animations: 2 diagnostic patterns first (Quadrants,
-                Border) for verifying the display renders the full 128 × 128
-                area, then 10 decorative test colours / gradients / cycles.
-                Start with <span className="font-medium text-fg-1">Diagnostic
-                · Quadrants</span> on a fresh build — if all 4 colour quadrants
-                are visible, the protocol stack and dimensions are right.
-              </p>
+              <p className="text-sm text-fg-2">{" "}{t("12 generated animations: 2 diagnostic patterns first (Quadrants, Border) for verifying the display renders the full 128 × 128 area, then 10 decorative test colours / gradients / cycles. Start with")}{" "}<span className="font-medium text-fg-1">{t("Diagnostic · Quadrants")}</span>{" "}{t("on a fresh build — if all 4 colour quadrants are visible, the protocol stack and dimensions are right.")}{" "}</p>
               <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {presets.map((p) => {
                   const isActive = p.id === selected;
@@ -334,7 +308,7 @@ export function Tft() {
                       <span className="flex w-full items-center justify-between">
                         <span className="font-medium">{p.display_name}</span>
                         <span className="text-[10px] uppercase tracking-wider text-fg-3">
-                          {p.frame_count} fr · {formatDuration(p.total_ms)}
+                          {p.frame_count}{" "}{t("fr ·")}{" "}{formatDuration(p.total_ms)}
                         </span>
                       </span>
                       <span className="mt-1 text-xs text-fg-2">{p.description}</span>
@@ -347,19 +321,13 @@ export function Tft() {
         </Card>
 
         {info && (
-          <Card title="Status">
+          <Card title={t("Status")}>
             <p className="text-sm text-fg-1">{info}</p>
           </Card>
         )}
 
-        <Card title="Next iteration">
-          <p className="text-sm text-fg-2">
-            Live system-info presets (battery percent, volume, CPU, clock,
-            etc.) need a polling + on-host text-rasterisation pipeline that
-            isn't built yet. Tracked as Phase 5e — see the project HANDOFF
-            for the scope and reasons. The current build ships the upload
-            path so contributors can hand-craft these images in any editor
-            and drop them in via <em>Custom image</em>.
+        <Card title={t("Next iteration")}>
+          <p className="text-sm text-fg-2">{" "}{t("Live system-info presets (battery percent, volume, CPU, clock, etc.) need a polling + on-host text-rasterisation pipeline that isn't built yet. Tracked as Phase 5e — see the project HANDOFF for the scope and reasons. The current build ships the upload path so contributors can hand-craft these images in any editor and drop them in via")}{" "}<em>{t("Custom image")}</em>.
           </p>
         </Card>
       </div>

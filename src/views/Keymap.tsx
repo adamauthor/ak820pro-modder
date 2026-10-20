@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Badge, Button, Card, ErrorBanner } from "../components/ui";
@@ -266,7 +267,7 @@ export function Keymap() {
   return (
     <>
       <PageHeader
-        title="Keymap"
+        title={t("Keymap")}
         description={
           layer === "fn"
             ? "Hold Fn to access this layer. Empty slots fall back to the base layer's mapping."
@@ -282,13 +283,9 @@ export function Keymap() {
               variant="ghost"
               onClick={resetToFactory}
               disabled={busy}
-              title="Stage the firmware's factory-default keymap for the active layer. Review, then Save to commit."
-            >
-              Factory default
-            </Button>
-            <Button variant={isDirty ? "ghost-active" : "ghost"} onClick={discard} disabled={busy || !isDirty}>
-              Discard
-            </Button>
+              title={t("Stage the firmware's factory-default keymap for the active layer. Review, then Save to commit.")}
+            >{" "}{t("Factory default")}{" "}</Button>
+            <Button variant={isDirty ? "ghost-active" : "ghost"} onClick={discard} disabled={busy || !isDirty}>{" "}{t("Discard")}{" "}</Button>
             <Button variant="primary" onClick={save} disabled={busy || !isDirty}>
               {busy ? "Saving…" : isDirty ? `Save (${dirty.size})` : "Saved"}
             </Button>
@@ -318,19 +315,14 @@ export function Keymap() {
         />
       </Card>
 
-      <Card title="Action picker" className="mt-6">
+      <Card title={t("Action picker")} className="mt-6">
         {selectedSlot === null ? (
-          <p className="text-sm text-fg-2">
-            Click a key in the layout above to pick a new action for it.
-          </p>
+          <p className="text-sm text-fg-2">{" "}{t("Click a key in the layout above to pick a new action for it.")}{" "}</p>
         ) : (
           <>
             {isFRowSlot(selectedSlot) && layer === "base" && (
               <div className="mb-4 rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-fg-1">
-                <b>Heads-up:</b> in <span className="font-mono">Mac</span> mode (hardware switch on the back), the keyboard
-                preempts the F-row base layer with media keys (brightness, volume, …). Remaps here may not fire on plain
-                F-key press. Switch to the <span className="font-mono">Fn</span> layer above for F-row macros that should
-                trigger via <span className="font-mono">Fn + F-key</span>.
+                <b>{t("Heads-up:")}</b>{" "}{t("in")}{" "}<span className="font-mono">{t("Mac")}</span>{" "}{t("mode (hardware switch on the back), the keyboard preempts the F-row base layer with media keys (brightness, volume, …). Remaps here may not fire on plain F-key press. Switch to the")}{" "}<span className="font-mono">{t("Fn")}</span>{" "}{t("layer above for F-row macros that should trigger via")}{" "}<span className="font-mono">{t("Fn + F-key")}</span>.
               </div>
             )}
             <ActionPicker
@@ -345,7 +337,7 @@ export function Keymap() {
         )}
       </Card>
 
-      <Card title="Legend" className="mt-6">
+      <Card title={t("Legend")} className="mt-6">
         <div className="flex flex-wrap items-center gap-5 text-xs text-fg-2">
           <LegendDot tone="bg-surface-raised border-line" label="factory default" />
           <LegendDot tone="bg-accent-500/20 border-accent-500/60" label="remapped (this layer)" />
@@ -809,14 +801,14 @@ function ActionPicker({
     <div>
       <header className="mb-4 flex flex-wrap items-baseline justify-between gap-3">
         <div>
-          <p className="kicker mb-1">Selected key</p>
+          <p className="kicker mb-1">{t("Selected key")}</p>
           <div className="flex items-baseline gap-3">
             <span className="text-lg font-medium text-fg-0">{slotMeta?.label ?? `Slot ${slot}`}</span>
             {defaultHid !== null && (
-              <Badge tone="neutral">default: {hidName(defaultHid)}</Badge>
+              <Badge tone="neutral">{t("default:")}{" "}{hidName(defaultHid)}</Badge>
             )}
             {currentAction && currentAction.kind !== "default" && (
-              <Badge tone="accent">now: {actionPreview(currentAction)}</Badge>
+              <Badge tone="accent">{t("now:")}{" "}{actionPreview(currentAction)}</Badge>
             )}
           </div>
         </div>
@@ -943,7 +935,7 @@ function LedDot() { return <span className="h-1 w-1 rounded-full bg-fg-4" />; }
 function Knob() {
   return (
     <div
-      title="Drehknopf · configuration coming soon"
+      title={t("Drehknopf · configuration coming soon")}
       className="relative flex items-center justify-center rounded-full border border-line-strong bg-gradient-to-br from-surface-raised to-surface-elevated shadow-inner"
       style={{ width: RIGHT_COL_WIDTH, height: CELL }}
     >
@@ -959,7 +951,7 @@ function Knob() {
 function TFTPlaceholder({ height }: { height: number }) {
   return (
     <div
-      title="0.85″ TFT display · custom GIFs land in phase 5"
+      title={t("0.85″ TFT display · custom GIFs land in phase 5")}
       className="rounded-md border border-line bg-surface-base p-1"
       style={{ width: RIGHT_COL_WIDTH, height }}
     >

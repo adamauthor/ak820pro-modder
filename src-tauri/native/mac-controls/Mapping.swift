@@ -77,48 +77,124 @@ func plannedMute(_ current: [KeyMapping], owner: MuteOwnership?, target: UInt64?
     return (result, nextOwner)
 }
 
-func updateKnobMappings(target: UInt64?, directory: URL) throws -> [ConnectedKeyboard] {
+// Version 2 tracks each owned source separately. A legacy Mute record is migrated
+// in memory; the original destination (including absence) is never guessed.
+struct MappingOwnership: Codable {
+    var version = 2
+    var profiles: [String: [String: MuteOwnership]] = [:]
+}
+func decodeOwnership(_ data: Data) throws -> MappingOwnership {
+    if let current = try? JSONDecoder().decode(MappingOwnership.self, from: data), current.version == 2 {
+        for rules in current.profiles.values {
+            for key in rules.keys {
+                guard let source = UInt64(key), [muteUsage, volumeUpUsage, volumeDownUsage].contains(source) || source >> 32 == 7 && (4...231).contains(source & 0xffffffff) else { throw MusicError.failed("Invalid mapping recovery source; no changes made") }
+            }
+        }
+        return current
+    }
+    let old = try JSONDecoder().decode([String: MuteOwnership].self, from: data)
+    return MappingOwnership(profiles: old.mapValues { [String(muteUsage): $0] })
+}
+func plannedRules(_ current: [KeyMapping], owners: [String: MuteOwnership], targets: [UInt64: UInt64]) throws -> ([KeyMapping], [String: MuteOwnership]) {
+    var result = current
+    var next: [String: MuteOwnership] = [:]
+    for source in Set(owners.keys.compactMap(UInt64.init)).union(targets.keys).sorted() {
+        let key = String(source), owner = owners[String(source)]
+        let rows = current.filter { $0[mappingSource] == source }
+        guard rows.count <= 1 else { throw MusicError.failed("Duplicate keyboard mapping; no changes made") }
+        let existing = rows.first?[mappingDestination]
+        if let owner, let existing, existing != owner.applied && existing != owner.original {
+            if targets[source] == nil { continue } // An external editor owns it now. Preserve it during undo.
+            throw MusicError.failed("A key mapping was changed by another app; no changes made")
+        }
+        let desired: UInt64?
+        if let target = targets[source] {
+            desired = target
+            next[key] = MuteOwnership(original: owner != nil ? owner!.original : existing, applied: target)
+        } else { desired = owner?.original }
+        result.removeAll { $0[mappingSource] == source }
+        if let desired { result.append([mappingSource: source, mappingDestination: desired]) }
+    }
+    return (result, next)
+}
+let volumeUpUsage: UInt64 = (12 << 32) | 0xe9
+let volumeDownUsage: UInt64 = (12 << 32) | 0xea
+let turnUpUsage: UInt64 = (7 << 32) | 109
+let turnDownUsage: UInt64 = (7 << 32) | 110
+let usbKeys = KeyboardProfile(id: "usb-keys", matching: ["VendorID": 3141, "ProductID": 32778, "Product": "AK820", "Transport": "USB", "PrimaryUsagePage": 1, "PrimaryUsage": 6])
+
+func updateControlMappings(target: UInt64?, rotation: Bool, remaps: [ProfileRemap], directory: URL) throws -> [ConnectedKeyboard] {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let lockPath = directory.appendingPathComponent("native-map.lock").path
-    let descriptor = Darwin.open(lockPath, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+    let descriptor = Darwin.open(directory.appendingPathComponent("native-map.lock").path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
     guard descriptor >= 0 else { throw MusicError.failed("Cannot open Mac mapping lock") }
     defer { Darwin.close(descriptor) }
     guard flock(descriptor, LOCK_EX) == 0 else { throw MusicError.failed("Cannot lock Mac mappings") }
     defer { flock(descriptor, LOCK_UN) }
     let ownershipFile = directory.appendingPathComponent("knob-ownership.json")
-    var owners: [String: MuteOwnership] = [:]
-    if FileManager.default.fileExists(atPath: ownershipFile.path) {
-        owners = try JSONDecoder().decode([String: MuteOwnership].self, from: Data(contentsOf: ownershipFile))
-    }
+    var document = FileManager.default.fileExists(atPath: ownershipFile.path) ? try decodeOwnership(Data(contentsOf: ownershipFile)) : MappingOwnership()
     let listing = try runHidutil(["list", "--ndjson", "--matching", "{\"VendorID\":3141}"])
     let services = try listing.split(separator: "\n").compactMap { line -> [String: Any]? in
         let value = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
         return value?["type"] as? String == "service" ? value : nil
     }
     var connected: [ConnectedKeyboard] = []
-    var changes: [(KeyboardProfile, [KeyMapping], [KeyMapping], MuteOwnership?)] = []
-    for profile in keyboardProfiles {
+    var changes: [(KeyboardProfile, [KeyMapping], [KeyMapping], [String: MuteOwnership])] = []
+    for profile in keyboardProfiles + [usbKeys] {
         let matches = services.filter { service in profile.matching.allSatisfy { key, value in String(describing: service[key] ?? "") == String(describing: value) } }
         guard matches.count <= 1 else { throw MusicError.failed("Multiple matching AJAZZ services; no changes made") }
         guard matches.count == 1 else { continue }
-        connected.append(ConnectedKeyboard(profile: profile.id, product: profile.matching["Product"] as! String, transport: profile.id == "usb" ? "USB" : "Bluetooth"))
+        if profile.id != "usb-keys" { connected.append(ConnectedKeyboard(profile: profile.id, product: profile.matching["Product"] as! String, transport: profile.id == "usb" ? "USB" : "Bluetooth")) }
         let match = try encodeJSON(profile.matching)
         let current = try parseMappings(runHidutil(["property", "--matching", match, "--get", "UserKeyMapping"]))
-        let (desired, owner) = try plannedMute(current, owner: owners[profile.id], target: target)
+        var targets: [UInt64: UInt64] = [:]
+        if profile.id != "usb-keys" {
+            targets[muteUsage] = target
+            if rotation { targets[volumeUpUsage] = turnUpUsage; targets[volumeDownUsage] = turnDownUsage }
+        }
+        if profile.id != "usb" {
+            for r in remaps { targets[(7 << 32) | UInt64(r.source)] = (7 << 32) | UInt64(r.destination) }
+        }
+        // Reserved marker destinations must never already belong to normal keys.
+        let previous = document.profiles[profile.id] ?? [:]
+        for row in current where [triggerUsage, turnUpUsage, turnDownUsage].contains(row[mappingDestination] ?? 0) {
+            let reserved = (target == triggerUsage ? [triggerUsage] : []) + (rotation ? [turnUpUsage, turnDownUsage] : [])
+            if let source = row[mappingSource], reserved.contains(row[mappingDestination]!), previous[String(source)] == nil {
+                throw MusicError.failed("F18–F20 are already assigned to another key. Remove that mapping first")
+            }
+        }
+        let (desired, owner) = try plannedRules(current, owners: previous, targets: targets)
         changes.append((profile, current, desired, owner))
     }
-    let encoder = JSONEncoder()
-    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    // Persist recovery records before writing, and retain old records until
-    // their undo has succeeded. No keyboard firmware commands are involved.
-    for (profile, _, _, owner) in changes { if let owner { owners[profile.id] = owner } }
-    try encoder.encode(owners).write(to: ownershipFile, options: .atomic)
-    for (profile, current, desired, _) in changes where current != desired {
-        let match = try encodeJSON(profile.matching)
-        _ = try runHidutil(["property", "--matching", match, "--set", encodeJSON(["UserKeyMapping": desired])])
-        guard try parseMappings(runHidutil(["property", "--matching", match, "--get", "UserKeyMapping"])) == desired else { throw MusicError.failed("Mac knob mapping readback failed") }
+    let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    let old = document
+    for (profile, _, _, owner) in changes {
+        document.profiles[profile.id] = (document.profiles[profile.id] ?? [:]).merging(owner) { _, new in new }
     }
-    for (profile, _, _, owner) in changes { owners[profile.id] = owner }
-    try encoder.encode(owners).write(to: ownershipFile, options: .atomic)
+    try encoder.encode(document).write(to: ownershipFile, options: .atomic)
+    var applied: [(KeyboardProfile, [KeyMapping])] = []
+    do {
+        for (profile, current, desired, _) in changes where current != desired {
+            applied.append((profile, current)) // Also undo a successful write followed by failed readback.
+            let match = try encodeJSON(profile.matching)
+            _ = try runHidutil(["property", "--matching", match, "--set", encodeJSON(["UserKeyMapping": desired])])
+            guard try parseMappings(runHidutil(["property", "--matching", match, "--get", "UserKeyMapping"])) == desired else { throw MusicError.failed("Mac control mapping readback failed") }
+        }
+    } catch {
+        var restored = true
+        for (profile, current) in applied.reversed() {
+            do {
+                let match = try encodeJSON(profile.matching)
+                _ = try runHidutil(["property", "--matching", match, "--set", encodeJSON(["UserKeyMapping": current])])
+                if try parseMappings(runHidutil(["property", "--matching", match, "--get", "UserKeyMapping"])) != current { restored = false }
+            } catch { restored = false }
+        }
+        if restored { try? encoder.encode(old).write(to: ownershipFile, options: .atomic) }
+        throw error
+    }
+    for (profile, _, _, owner) in changes { document.profiles[profile.id] = owner }
+    try encoder.encode(document).write(to: ownershipFile, options: .atomic)
     return connected
+}
+func updateKnobMappings(target: UInt64?, directory: URL) throws -> [ConnectedKeyboard] {
+    try updateControlMappings(target: target, rotation: false, remaps: [], directory: directory)
 }

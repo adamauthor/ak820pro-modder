@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { PageHeader } from "../components/Layout";
@@ -320,14 +321,12 @@ export function Macros() {
   return (
     <>
       <PageHeader
-        title="Macros"
-        description="Record key sequences once, replay them with a single key press. Up to 100 slots, 79 actions per macro."
+        title={t("Macros")}
+        description={t("Record key sequences once, replay them with a single key press. Up to 100 slots, 79 actions per macro.")}
         action={
           <div className="flex gap-2">
             {dirty && (
-              <Button variant="ghost" size="sm" onClick={discard} disabled={busy}>
-                Discard
-              </Button>
+              <Button variant="ghost" size="sm" onClick={discard} disabled={busy}>{" "}{t("Discard")}{" "}</Button>
             )}
             <Button variant="primary" size="sm" onClick={save} disabled={busy || !dirty}>
               {busy ? "Writing…" : dirty ? "Save to device" : "Saved"}
@@ -340,15 +339,13 @@ export function Macros() {
 
       <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
         {/* ----- slot list ----- */}
-        <Card title="Slots" action={
-          <Button size="sm" variant="ghost" onClick={addMacroSlot} disabled={busy || limits === null}>
-            + New
-          </Button>
+        <Card title={t("Slots")} action={
+          <Button size="sm" variant="ghost" onClick={addMacroSlot} disabled={busy || limits === null}>{" "}{t("+ New")}{" "}</Button>
         }>
           {remote === null ? (
-            <p className="text-sm text-fg-2">Reading…</p>
+            <p className="text-sm text-fg-2">{t("Reading…")}</p>
           ) : draft.length === 0 ? (
-            <p className="text-sm text-fg-2">No macros yet. Click <b>+ New</b> to create one.</p>
+            <p className="text-sm text-fg-2">{t("No macros yet. Click")}{" "}<b>{t("+ New")}</b>{" "}{t("to create one.")}</p>
           ) : (
             <ul className="-mx-2 space-y-px">
               {draft.map((m) => {
@@ -387,16 +384,12 @@ export function Macros() {
                 variant="danger"
                 onClick={() => deleteMacro(selected.macro_id)}
                 disabled={busy}
-              >
-                Delete
-              </Button>
+              >{" "}{t("Delete")}{" "}</Button>
             )
           }
         >
           {selected === null ? (
-            <p className="text-sm text-fg-2">
-              Select a macro on the left, or create a new one to start recording.
-            </p>
+            <p className="text-sm text-fg-2">{" "}{t("Select a macro on the left, or create a new one to start recording.")}{" "}</p>
           ) : (
             <MacroEditor
               macro={selected}
@@ -450,36 +443,27 @@ function MacroEditor({
     <div className="space-y-5">
       {/* name */}
       <div>
-        <label className="kicker mb-1 block">Name (local)</label>
+        <label className="kicker mb-1 block">{t("Name (local)")}</label>
         <input
           value={name}
           onChange={(e) => onNameChange(e.target.value)}
           placeholder={`Macro M${macro.macro_id + 1}`}
           className="w-full rounded-md border border-line bg-surface-elevated/40 px-3 py-2 text-sm text-fg-0 outline-none focus:border-accent-500/60"
         />
-        <p className="mt-1 text-xs text-fg-3">
-          Names are stored on this Mac only — the keyboard firmware doesn't keep them.
-        </p>
+        <p className="mt-1 text-xs text-fg-3">{" "}{t("Names are stored on this Mac only — the keyboard firmware doesn't keep them.")}{" "}</p>
       </div>
 
       {/* recorder + meter */}
       <div className="flex flex-wrap items-center gap-3">
         {recording ? (
-          <Button variant="danger" size="sm" onClick={onStopRecording}>
-            ⏹ Stop recording
-          </Button>
+          <Button variant="danger" size="sm" onClick={onStopRecording}>{" "}{t("⏹ Stop recording")}{" "}</Button>
         ) : (
-          <Button variant="primary" size="sm" onClick={onStartRecording}>
-            ⏺ Record
-          </Button>
+          <Button variant="primary" size="sm" onClick={onStartRecording}>{" "}{t("⏺ Record")}{" "}</Button>
         )}
-        <Button variant="ghost" size="sm" onClick={onClear} disabled={macro.actions.length === 0 || recording}>
-          Clear actions
-        </Button>
+        <Button variant="ghost" size="sm" onClick={onClear} disabled={macro.actions.length === 0 || recording}>{" "}{t("Clear actions")}{" "}</Button>
         <div className="ml-auto flex items-center gap-3 text-xs text-fg-2">
           <span>
-            <Mono>{macro.actions.length}</Mono> actions
-          </span>
+            <Mono>{macro.actions.length}</Mono>{" "}{t("actions")}{" "}</span>
           <span className="flex items-center gap-2">
             <span className="relative h-1.5 w-24 overflow-hidden rounded-full bg-surface-base">
               <span
@@ -496,29 +480,23 @@ function MacroEditor({
       </div>
 
       {recording && (
-        <div className="rounded-md border border-accent-500/40 bg-accent-glow px-3 py-2 text-sm text-fg-1">
-          Recording — every keypress in this window goes into the macro.
-          <br />
-          <span className="text-xs text-fg-3">
-            Inter-event delays are captured as wall-clock milliseconds. Click <b>Stop</b> when done.
-          </span>
+        <div className="rounded-md border border-accent-500/40 bg-accent-glow px-3 py-2 text-sm text-fg-1">{" "}{t("Recording — every keypress in this window goes into the macro.")}{" "}<br />
+          <span className="text-xs text-fg-3">{" "}{t("Inter-event delays are captured as wall-clock milliseconds. Click")}{" "}<b>{t("Stop")}</b>{" "}{t("when done.")}{" "}</span>
         </div>
       )}
 
       {/* timeline */}
       {macro.actions.length === 0 ? (
-        <p className="text-sm text-fg-3">
-          Empty macro. Press <b>Record</b> and type to capture events.
-        </p>
+        <p className="text-sm text-fg-3">{" "}{t("Empty macro. Press")}{" "}<b>{t("Record")}</b>{" "}{t("and type to capture events.")}{" "}</p>
       ) : (
         <div className="overflow-hidden rounded-md border border-line">
           <table className="w-full text-sm">
             <thead className="bg-surface-elevated/40 text-xs uppercase tracking-wide text-fg-3">
               <tr>
                 <th className="w-10 px-3 py-2 text-left">#</th>
-                <th className="px-3 py-2 text-left">Action</th>
-                <th className="px-3 py-2 text-left">Key</th>
-                <th className="px-3 py-2 text-left">Delay (ms)</th>
+                <th className="px-3 py-2 text-left">{t("Action")}</th>
+                <th className="px-3 py-2 text-left">{t("Key")}</th>
+                <th className="px-3 py-2 text-left">{t("Delay (ms)")}</th>
                 <th className="w-10" />
               </tr>
             </thead>

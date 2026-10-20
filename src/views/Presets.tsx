@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 /**
  * Presets view — curated cross-cutting profiles (lighting + keymap
  * overrides + automation seeds) for common use-cases like FPS gaming,
@@ -74,8 +75,8 @@ export function Presets() {
   return (
     <>
       <PageHeader
-        title="Presets"
-        description="One-click cross-cutting profiles. Each preset patches lighting, key remaps, and seeds the Automations library for a specific use case. Applied additively — your other settings are preserved."
+        title={t("Presets")}
+        description={t("One-click cross-cutting profiles. Each preset patches lighting, key remaps, and seeds the Automations library for a specific use case. Applied additively — your other settings are preserved.")}
       />
 
       <ErrorBanner>{err}</ErrorBanner>
@@ -83,7 +84,7 @@ export function Presets() {
       {lastReport && <ReportBanner report={lastReport.report} preset={lastReport.preset} onDismiss={() => setLastReport(null)} />}
 
       {presets === null ? (
-        <p className="text-sm text-fg-2">Loading presets…</p>
+        <p className="text-sm text-fg-2">{t("Loading presets…")}</p>
       ) : (
         <>
           <div className="mb-5 flex flex-wrap gap-2">
@@ -153,9 +154,7 @@ function PresetCard({
               </span>
             ))}
           </div>
-          <Button size="sm" variant="primary" onClick={onPick} disabled={disabled}>
-            Review &amp; apply
-          </Button>
+          <Button size="sm" variant="primary" onClick={onPick} disabled={disabled}>{" "}{t("Review & apply")}{" "}</Button>
         </div>
       </div>
     </Card>
@@ -199,13 +198,13 @@ function ApplyModal({
         <header className="border-b border-line px-5 pb-3 pt-4">
           <div className="flex items-baseline gap-2">
             <span className="text-xl">{preset.icon}</span>
-            <h2 className="text-base font-medium text-fg-0">Apply: {preset.name}</h2>
+            <h2 className="text-base font-medium text-fg-0">{t("Apply:")}{" "}{preset.name}</h2>
           </div>
           <p className="mt-1 text-xs text-fg-3">{preset.description}</p>
         </header>
 
         <div className="space-y-3 px-5 py-4">
-          <p className="text-xs text-fg-2">Pick what to apply — unchecked parts of your keyboard stay untouched.</p>
+          <p className="text-xs text-fg-2">{t("Pick what to apply — unchecked parts of your keyboard stay untouched.")}</p>
           <Option
             label="Lighting"
             available={preset.lighting !== null}
@@ -237,9 +236,7 @@ function ApplyModal({
         </div>
 
         <footer className="flex items-center justify-end gap-2 border-t border-line px-5 py-3">
-          <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>
-            Cancel
-          </Button>
+          <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>{" "}{t("Cancel")}{" "}</Button>
           <Button size="sm" variant="primary" onClick={() => onApply(opts)} disabled={busy || nothingPicked}>
             {busy ? "Applying…" : "Apply"}
           </Button>
@@ -307,10 +304,10 @@ function ReportBanner({
     <div className="mb-4 flex items-start gap-3 rounded-md border border-good/40 bg-good/10 px-3 py-2">
       <span className="text-lg" aria-hidden>{preset.icon}</span>
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-fg-0">Applied: {preset.name}</p>
+        <p className="text-sm font-medium text-fg-0">{t("Applied:")}{" "}{preset.name}</p>
         <p className="mt-0.5 text-xs text-fg-2">{summary}</p>
       </div>
-      <button onClick={onDismiss} className="shrink-0 text-fg-3 hover:text-fg-0" aria-label="Dismiss">
+      <button onClick={onDismiss} className="shrink-0 text-fg-3 hover:text-fg-0" aria-label={t("Dismiss")}>
         ✕
       </button>
     </div>

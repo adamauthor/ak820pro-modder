@@ -11,13 +11,75 @@ pub enum KnobMode {
     Original,
     PlayPause,
     YoutubeMusic,
+    Smart,
 }
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct Bindings {
+    pub single: String,
+    pub double: String,
+    pub triple: String,
+    pub rotation: String,
+    pub shift_rotation: String,
+}
+impl Default for Bindings {
+    fn default() -> Self {
+        Self {
+            single: "toggle".into(),
+            double: "next".into(),
+            triple: "previous".into(),
+            rotation: "volume".into(),
+            shift_rotation: "seek".into(),
+        }
+    }
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ProfileRemap {
+    pub source: u16,
+    pub destination: u16,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct AppProfile {
+    pub id: String,
+    pub name: String,
+    pub bundle_id: String,
+    pub enabled: bool,
+    pub bindings: Bindings,
+    pub remaps: Vec<ProfileRemap>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
     pub knob_mode: KnobMode,
     pub launch_at_login: bool,
     pub youtube_app_id: Option<String>,
+    pub music_service: String,
+    pub follow_playing: bool,
+    pub capture_rotation: bool,
+    pub click_interval_ms: u16,
+    pub bindings: Bindings,
+    pub profiles: Vec<AppProfile>,
+}
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            knob_mode: KnobMode::Original,
+            launch_at_login: false,
+            youtube_app_id: None,
+            music_service: "youtube_music".into(),
+            follow_playing: true,
+            capture_rotation: false,
+            click_interval_ms: 300,
+            bindings: Bindings::default(),
+            profiles: Vec::new(),
+        }
+    }
+}
+impl Config {
+    fn reserved(&self, usage: u16) -> bool {
+        matches!(self.knob_mode, KnobMode::YoutubeMusic | KnobMode::Smart)
+            && (usage == 111 || self.capture_rotation && [109, 110].contains(&usage))
+    }
 }
 #[derive(Default)]
 pub struct State {
@@ -52,7 +114,7 @@ fn write_config(path: &Path, config: &Config) -> Result<(), String> {
 }
 fn configure_request(app: &AppHandle, config: &Config) -> Result<Value, String> {
     Ok(json!({"operation":"configure", "mode":config.knob_mode,
-        "youtube_app_id":config.youtube_app_id,
+        "youtube_app_id":config.youtube_app_id, "config": config,
         "directory": app.path().app_data_dir().map_err(|e| e.to_string())?}))
 }
 
@@ -69,12 +131,22 @@ pub fn initialize(app: &AppHandle) -> Result<(), String> {
 pub fn shutdown() {
     let _ = native::request(json!({"operation":"shutdown"}));
 }
-pub fn f20_reserved(app: &AppHandle) -> bool {
+pub fn marker_reserved(app: &AppHandle, usage: u16) -> bool {
     app.state::<State>()
         .config
         .lock()
-        .map(|c| c.knob_mode == KnobMode::YoutubeMusic)
+        .map(|c| c.reserved(usage))
         .unwrap_or(false)
+}
+pub fn shortcut_reserved(app: &AppHandle, shortcut: &str) -> bool {
+    [("F18", 109), ("F19", 110), ("F20", 111)]
+        .iter()
+        .any(|(label, usage)| {
+            shortcut
+                .split('+')
+                .any(|part| part.eq_ignore_ascii_case(label))
+                && marker_reserved(app, *usage)
+        })
 }
 
 async fn on_main(app: &AppHandle, request: Value) -> Result<Value, String> {
@@ -84,6 +156,10 @@ async fn on_main(app: &AppHandle, request: Value) -> Result<Value, String> {
     })
     .map_err(|e| e.to_string())?;
     receiver.await.map_err(|e| e.to_string())?
+}
+pub async fn prepare_base_remaps(app: &AppHandle) -> Result<(), String> {
+    on_main(app, json!({"operation":"base_edit"})).await?;
+    Ok(())
 }
 fn with_config(app: &AppHandle, mut status: Value) -> Result<Value, String> {
     status["config"] = serde_json::to_value(
@@ -122,16 +198,26 @@ pub async fn mac_controls_save(app: AppHandle, config: Config) -> Result<Value, 
     {
         return Err("Choose an installed YouTube Music Safari app".into());
     }
-    if config.knob_mode == KnobMode::YoutubeMusic {
+    if matches!(config.knob_mode, KnobMode::YoutubeMusic | KnobMode::Smart) {
         let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
         if crate::automations::load(dir)?
             .iter()
-            .any(|a| a.marker_hid == Some(111))
+            .any(|a| a.marker_hid.is_some_and(|m| config.reserved(u16::from(m))))
         {
             return Err(
-                "F20 is assigned to an automation. Unassign it before enabling the music knob"
+                "A reserved knob key (F18–F20) is assigned to an automation. Unassign it first"
                     .into(),
             );
+        }
+    }
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    for m in crate::host_keyboard::load(&dir)?.macros {
+        for (label, usage) in [("F18", 109), ("F19", 110), ("F20", 111)] {
+            if config.reserved(usage)
+                && m.shortcut.split('+').any(|p| p.eq_ignore_ascii_case(label))
+            {
+                return Err(format!("{label} is already used by a Mac macro"));
+            }
         }
     }
     let previous = state.config.lock().map_err(|e| e.to_string())?.clone();
@@ -149,6 +235,18 @@ pub async fn mac_controls_save(app: AppHandle, config: Config) -> Result<Value, 
     with_config(&app, status)
 }
 
+#[tauri::command]
+pub async fn mac_controls_preview(app: AppHandle, enabled: bool) -> Result<Value, String> {
+    with_config(
+        &app,
+        on_main(&app, json!({"operation":"preview", "enabled":enabled})).await?,
+    )
+}
+#[tauri::command]
+pub async fn mac_controls_permission(app: AppHandle) -> Result<(), String> {
+    on_main(&app, json!({"operation":"permission"})).await?;
+    Ok(())
+}
 #[cfg(any(target_os = "macos", test))]
 fn xml_escape(value: &str) -> String {
     value
@@ -245,6 +343,33 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_music_settings_gain_defaults_without_losing_the_users_choices() {
+        let config: Config = serde_json::from_str(r#"{"knob_mode":"youtube_music","launch_at_login":true,"youtube_app_id":"com.apple.Safari.WebApp.example"}"#).unwrap();
+        assert!(config.launch_at_login);
+        assert_eq!(
+            config.youtube_app_id.as_deref(),
+            Some("com.apple.Safari.WebApp.example")
+        );
+        assert_eq!(config.music_service, "youtube_music");
+        assert_eq!(config.bindings.double, "next");
+        assert!(!config.capture_rotation);
+        assert!(config.reserved(111));
+        assert!(!config.reserved(109));
+    }
+    #[test]
+    fn rotation_markers_are_reserved_only_while_captured() {
+        let mut config = Config {
+            knob_mode: KnobMode::Smart,
+            capture_rotation: true,
+            ..Config::default()
+        };
+        for key in [109, 110, 111] {
+            assert!(config.reserved(key));
+        }
+        config.knob_mode = KnobMode::Original;
+        assert!(!config.reserved(111));
+    }
     #[test]
     fn login_arguments_are_xml_values_not_shell_commands() {
         let plist = launch_agent_plist("/Users/A & B/Apps/AK820 <test>.app");

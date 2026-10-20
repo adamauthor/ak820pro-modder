@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ak820-audio-reactive"
-version = "0.7.0-macos.2"
+version = "0.8.0-macos.1"
 dependencies = [
  "realfft",
  "screencapturekit",
@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "ak820-cli"
-version = "0.7.0-macos.2"
+version = "0.8.0-macos.1"
 dependencies = [
  "ak820-audio-reactive",
  "ak820-protocol",
@@ -43,7 +43,7 @@ dependencies = [
 
 [[package]]
 name = "ak820-protocol"
-version = "0.7.0-macos.2"
+version = "0.8.0-macos.1"
 dependencies = [
  "fs2",
  "hex",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "ak820pro-app"
-version = "0.7.0-macos.2"
+version = "0.8.0-macos.1"
 dependencies = [
  "ak820-audio-reactive",
  "ak820-protocol",

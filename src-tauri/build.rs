@@ -37,8 +37,13 @@ mod mac_controls {
             "-target",
             &format!("{architecture}-apple-macosx11.0"),
         ]);
+        command
+            .arg("-module-cache-path")
+            .arg(output.join("swift-module-cache"));
         for name in [
             "AudioState.swift",
+            "ControlModel.swift",
+            "Actions.swift",
             "Discovery.swift",
             "Mapping.swift",
             "Player.swift",

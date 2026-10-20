@@ -61,7 +61,7 @@ func findPlayer(_ root: AXUIElement) -> YouTubePlayer? {
     return YouTubePlayer(button: button, playing: ["pause", "пауза"].contains(axName(button).lowercased()))
 }
 func pressAX(_ element: AXUIElement) throws {
-    guard AXUIElementPerformAction(element, kAXPressAction as CFString) == .success else { throw MusicError.failed("YT Music did not accept the player action") }
+    guard AXUIElementPerformAction(element, kAXPressAction as CFString) == .success else { throw MusicError.failed("The music app did not accept the player action") }
 }
 func startLikedMusic(_ root: AXUIElement, canPress: () -> Bool = { true }) throws {
     guard let web = axFind(root, limit: 100, seconds: 2, where: { axRole($0) == "AXWebArea" }) else {
@@ -91,27 +91,81 @@ func startLikedMusic(_ root: AXUIElement, canPress: () -> Bool = { true }) throw
     try pressAX(play)
 }
 
-struct OtherPlayingPlayer {
-    let button: AXUIElement
-    let name: String
+struct MediaSurface {
+    let root: AXUIElement
+    let toggle: AXUIElement
+    let playing: Bool
+    let next: AXUIElement?
+    let previous: AXUIElement?
 }
-func otherPlayingPlayer() -> OtherPlayingPlayer? {
-    // Target only already-running music apps with an enabled Pause control.
-    // Audio-engine activity alone includes closed WebKit windows and alerts;
-    // it must never select the system's default media application.
-    for (bundle, name) in [("com.spotify.client", "Spotify"), ("com.apple.Music", "Music")] {
-        guard let application = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else { continue }
-        let root = playerRoot(application.processIdentifier)
-        if let pause = axFind(root, limit: 1200, seconds: 2, where: { element in
-            axRole(element) == kAXButtonRole && ["pause", "пауза"].contains(axName(element).lowercased()) &&
-            (axAttribute(element, kAXEnabledAttribute) as? NSNumber)?.boolValue != false
-        }) { return OtherPlayingPlayer(button: pause, name: name) }
+func enabledButton(_ element: AXUIElement) -> Bool {
+    axRole(element) == kAXButtonRole && (axAttribute(element, kAXEnabledAttribute) as? NSNumber)?.boolValue != false
+}
+let playNames = ["play", "воспроизвести", "воспроизведение", "start playback"]
+let pauseNames = ["pause", "пауза", "приостановить", "pause playback"]
+let nextNames = ["next", "next song", "next track", "следующий", "следующий трек", "следующая песня", "далее"]
+let previousNames = ["previous", "previous song", "previous track", "предыдущий", "предыдущий трек", "предыдущая песня", "назад"]
+func mediaSurface(_ root: AXUIElement, service: String) -> MediaSurface? {
+    if service == "youtube_music" {
+        guard let player = findPlayer(root), let toolbar = axFind(root, where: { axRole($0) == kAXToolbarRole && ["player bar", "панель проигрывателя", "панель плеера"].contains(axName($0).lowercased()) }) else { return nil }
+        return MediaSurface(root: toolbar, toggle: player.button, playing: player.playing,
+            next: axFind(toolbar, limit: 100, seconds: 1, where: { enabledButton($0) && nextNames.contains(axName($0).lowercased()) }),
+            previous: axFind(toolbar, limit: 100, seconds: 1, where: { enabledButton($0) && previousNames.contains(axName($0).lowercased()) }))
     }
-    return nil
+    guard let button = axFind(root, limit: 1200, seconds: 2, where: { element in
+        let name = axName(element).lowercased()
+        guard enabledButton(element), (playNames + pauseNames).contains(name) else { return false }
+        let identifier = axAttribute(element, kAXIdentifierAttribute) as? String ?? ""
+        if service == "apple_music" && identifier.contains("playbackTransportControl") { return true }
+        var parent = element
+        // A transport has Previous and Next controls in the same small group.
+        // This rejects Play buttons in album cards or a recommendation feed.
+        for _ in 0..<3 {
+            guard let value = axAttribute(parent, kAXParentAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return false }
+            parent = unsafeBitCast(value, to: AXUIElement.self)
+            guard ![kAXApplicationRole, kAXWindowRole, "AXWebArea"].contains(axRole(parent)) else { return false }
+            let previous = axFind(parent, limit: 60, seconds: 0.3, where: { enabledButton($0) && previousNames.contains(axName($0).lowercased()) })
+            let next = axFind(parent, limit: 60, seconds: 0.3, where: { enabledButton($0) && nextNames.contains(axName($0).lowercased()) })
+            if previous != nil && next != nil { return true }
+        }
+        return false
+    }) else { return nil }
+    func transport(_ names: [String], _ suffix: String) -> AXUIElement? {
+        axFind(root, limit: 700, seconds: 1, where: { enabledButton($0) && (names.contains(axName($0).lowercased()) || (axAttribute($0, kAXIdentifierAttribute) as? String ?? "").hasSuffix(suffix)) })
+    }
+    return MediaSurface(root: root, toggle: button, playing: pauseNames.contains(axName(button).lowercased()), next: transport(nextNames, ".trailingTransportControl"), previous: transport(previousNames, ".leadingTransportControl"))
+}
+func seekSurface(_ surface: MediaSurface, by delta: Double) throws {
+    guard let slider = axFind(surface.root, limit: 200, seconds: 1, where: { element in
+        let name = axName(element).lowercased(), id = (axAttribute(element, kAXIdentifierAttribute) as? String ?? "").lowercased()
+        return axRole(element) == kAXSliderRole && ["progress", "seek", "playback", "elapsed", "воспроизведения", "позиция"].contains(where: { name.contains($0) || id.contains($0) })
+    }), let value = (axAttribute(slider, kAXValueAttribute) as? NSNumber)?.doubleValue,
+        let maximum = (axAttribute(slider, kAXMaxValueAttribute) as? NSNumber)?.doubleValue, maximum > 0 else { throw MusicError.failed("This player's seek control is unavailable") }
+    var settable = DarwinBoolean(false)
+    guard AXUIElementIsAttributeSettable(slider, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue else { throw MusicError.failed("This player does not expose seeking to Accessibility") }
+    // AXValueDescription provides the elapsed time when the value is normalized.
+    // Never interpret a percentage as seconds without a confirmed elapsed time.
+    guard let step = timelineStep(value: value, maximum: maximum,
+        description: axAttribute(slider, kAXValueDescriptionAttribute) as? String, delta: delta) else { throw MusicError.failed("Cannot determine the seek timeline units for this player") }
+    guard AXUIElementSetAttributeValue(slider, kAXValueAttribute as CFString, NSNumber(value: min(maximum, max(0, value + step)))) == .success else { throw MusicError.failed("The player did not accept seeking") }
+}
+func serviceBundle(_ service: String, youtube: String) -> String {
+    service == "spotify" ? "com.spotify.client" : service == "apple_music" ? "com.apple.Music" : youtube
+}
+
+func chooseMusicService(preferred: String, follow: Bool, playing: Set<String>, available: Set<String>, last: String?) -> String {
+    guard follow else { return preferred }
+    if playing.contains(preferred) { return preferred }
+    if let active = ["youtube_music", "spotify", "apple_music"].first(where: playing.contains) { return active }
+    if let last, available.contains(last) { return last }
+    return preferred
 }
 
 final class MusicController {
     private let worker = DispatchQueue(label: "local.ak820pro.music-actions")
+    var service = "youtube_music"
+    var followPlaying = true
+    private var lastRoute: String? // Worker queue only.
     private var busy = false // Main queue only, prevents duplicate starts on repeated clicks.
     private let requestLock = NSLock()
     private var requestID: UInt64 = 0
@@ -124,44 +178,87 @@ final class MusicController {
         requestLock.lock(); defer { requestLock.unlock() }
         return requestID == request
     }
-    func cancel() { _ = beginRequest(); busy = false }
+    func cancel() { _ = beginRequest(); busy = false; worker.async { [self] in lastRoute = nil } }
     var status: (String) -> Void = { _ in }
 
-    func handleClick() {
+    func perform(_ action: String) {
         guard !busy else { return }
         guard AXIsProcessTrusted() else { status("Enable Accessibility for AK820 Pro Modder"); return }
         busy = true
-        let request = beginRequest()
-        let bundle = youtubeBundle
+        let request = beginRequest(), preferred = service, follow = followPlaying, youtube = youtubeBundle
         worker.async { [self] in
             guard isCurrent(request) else { return }
-            let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first
-            let current = app.flatMap { playerWindow($0.processIdentifier) }.flatMap { findPlayer($0) }
-            let audioActive = try? outputIsActive()
-            let other = current?.playing == true || audioActive == false ? nil : otherPlayingPlayer()
+            var route = preferred
+            var surfaces: [String: MediaSurface] = [:]
+            for service in follow ? [preferred] + ["youtube_music", "spotify", "apple_music"].filter({ $0 != preferred }) : [preferred] {
+                let bundle = serviceBundle(service, youtube: youtube)
+                guard !bundle.isEmpty, let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else { continue }
+                if let surface = mediaSurface(playerRoot(app.processIdentifier), service: service) { surfaces[service] = surface }
+            }
+            route = chooseMusicService(preferred: preferred, follow: follow,
+                playing: Set(surfaces.filter { $0.value.playing }.map(\.key)), available: Set(surfaces.keys), last: lastRoute)
+            if action == "liked" { route = "youtube_music" }
+            let bundle = serviceBundle(route, youtube: youtube)
             do {
                 guard isCurrent(request) else { return }
-                switch musicAction(audioActive: audioActive, youtubePlaying: current?.playing, otherPlayerPlaying: other != nil) {
-                case .pauseYouTube:
-                    try pressAX(current!.button)
-                    finish("Paused", request: request)
-                case .pauseOtherPlayer:
-                    try pressAX(other!.button)
-                    finish("\(other!.name): paused", request: request)
-                case .resumeYouTube:
-                    try pressAX(current!.button)
-                    try confirmPlayback(playerRoot(app!.processIdentifier), request: request)
-                    finish("YouTube Music: playing", request: request)
-                case .startYouTube: launchAndPlay(bundle: bundle, request: request)
-                }
+                if action == "open" { openNative(bundle: bundle, play: false, route: route, request: request); return }
+                if action == "liked" { launchAndPlay(forceLiked: true, bundle: youtube, request: request); return }
+                if let surface = surfaces[route] {
+                    switch action {
+                    case "toggle":
+                        try pressAX(surface.toggle)
+                        if route == "youtube_music" && !surface.playing,
+                           let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first {
+                            try confirmPlayback(playerRoot(app.processIdentifier), request: request)
+                        }
+                    case "next": guard let button = surface.next else { throw MusicError.failed("Next track is unavailable in this player") }; try pressAX(button)
+                    case "previous": guard let button = surface.previous else { throw MusicError.failed("Previous track is unavailable in this player") }; try pressAX(button)
+                    case "seek_forward": try seekSurface(surface, by: 5)
+                    case "seek_backward": try seekSurface(surface, by: -5)
+                    default: throw MusicError.failed("Unknown music action")
+                    }
+                    lastRoute = route
+                    finish("\(route == "youtube_music" ? "YouTube Music" : route == "spotify" ? "Spotify" : "Apple Music"): \(action == "toggle" ? surface.playing ? "paused" : "playing" : action)", request: request)
+                } else if action == "toggle" {
+                    lastRoute = route
+                    if route == "youtube_music" { launchAndPlay(bundle: bundle, request: request) }
+                    else { openNative(bundle: bundle, play: true, route: route, request: request) }
+                } else { throw MusicError.failed("Start a track in the selected player first") }
             } catch { finish("Error: \(error)", request: request) }
         }
     }
-
-    func playLikedMusic() {
-        guard !busy, AXIsProcessTrusted() else { return }
-        busy = true
-        launchAndPlay(forceLiked: true, bundle: youtubeBundle, request: beginRequest())
+    private func openNative(bundle: String, play: Bool, route: String, request: UInt64) {
+        DispatchQueue.main.async { [self] in
+            guard isCurrent(request) else { return }
+            guard !bundle.isEmpty, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else { finish("Error: Install the selected music app, then Refresh", request: request); return }
+            let configuration = NSWorkspace.OpenConfiguration(); configuration.activates = true
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { [self] application, error in
+                guard isCurrent(request) else { return }
+                guard application != nil, error == nil else { finish("Error: Could not open the selected music app", request: request); return }
+                guard play else { finish("Music app opened", request: request); return }
+                worker.async { [self] in
+                    do {
+                        for _ in 0..<20 {
+                            guard isCurrent(request) else { return }
+                            if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first,
+                               let player = mediaSurface(playerRoot(app.processIdentifier), service: route) {
+                                if !player.playing { try pressAX(player.toggle) }
+                                for _ in 0..<8 {
+                                    guard isCurrent(request) else { return }
+                                    if mediaSurface(playerRoot(app.processIdentifier), service: route)?.playing == true {
+                                        finish("\(route == "spotify" ? "Spotify" : "Apple Music"): playing", request: request); return
+                                    }
+                                    Thread.sleep(forTimeInterval: 0.25)
+                                }
+                                throw MusicError.failed("Choose a track in the selected music app first")
+                            }
+                            Thread.sleep(forTimeInterval: 0.5)
+                        }
+                        throw MusicError.failed("Choose a track or sign in to the selected music app, then try again")
+                    } catch { finish("Error: \(error)", request: request) }
+                }
+            }
+        }
     }
 
     private func launchAndPlay(forceLiked: Bool = false, bundle: String, request: UInt64) {

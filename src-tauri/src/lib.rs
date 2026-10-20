@@ -101,6 +101,9 @@ fn refresh_automation_shortcuts(app: &AppHandle) -> Result<(), String> {
         if m.shortcut.trim().is_empty() {
             continue;
         }
+        if mac_controls::shortcut_reserved(app, &m.shortcut) {
+            return Err("This shortcut key is reserved for the knob".into());
+        }
         let shortcut: Shortcut = m
             .shortcut
             .parse()
@@ -218,6 +221,9 @@ fn host_macros_save(app: AppHandle, config: host_keyboard::Config) -> Result<(),
         if m.shortcut.is_empty() {
             continue;
         }
+        if mac_controls::shortcut_reserved(&app, &m.shortcut) {
+            return Err("This shortcut key is reserved for the knob".into());
+        }
         let shortcut: Shortcut = m
             .shortcut
             .parse()
@@ -251,9 +257,15 @@ async fn host_remaps_apply(
     remaps: Vec<host_keyboard::Remap>,
     restore: bool,
 ) -> Result<Vec<host_keyboard::Remap>, String> {
-    if !restore && mac_controls::f20_reserved(&app) && remaps.iter().any(|r| r.destination == 111) {
-        return Err("F20 is reserved for the YouTube Music knob while it is enabled".into());
+    if !restore
+        && remaps.iter().any(|r| {
+            mac_controls::marker_reserved(&app, r.destination)
+                || mac_controls::marker_reserved(&app, r.source)
+        })
+    {
+        return Err("F18–F20 are reserved for the knob while it is enabled".into());
     }
+    mac_controls::prepare_base_remaps(&app).await?;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || host_keyboard::apply_remaps(&dir, remaps, restore))
         .await
@@ -677,7 +689,10 @@ async fn assign_automation_marker(
         .path()
         .app_data_dir()
         .map_err(|e| AppError::Protocol(format!("app_data_dir: {e}")))?;
-    let knob_uses_f20 = mac_controls::f20_reserved(&app);
+    let reserved: Vec<u8> = MARKER_HID_RANGE
+        .clone()
+        .filter(|m| mac_controls::marker_reserved(&app, u16::from(*m)))
+        .collect();
     let chosen = {
         let dir = dir.clone();
         tokio::task::spawn_blocking(move || -> Result<u8, String> {
@@ -695,13 +710,13 @@ async fn assign_automation_marker(
                 Some(s)
                     if MARKER_HID_RANGE.contains(&s)
                         && !used.contains(&s)
-                        && !(knob_uses_f20 && s == 111) =>
+                        && !reserved.contains(&s) =>
                 {
                     s
                 }
                 _ => MARKER_HID_RANGE
                     .clone()
-                    .find(|c| !(used.contains(c) || knob_uses_f20 && *c == 111))
+                    .find(|c| !(used.contains(c) || reserved.contains(c)))
                     .ok_or_else(|| {
                         "Available F13–F24 markers are all in use; unassign one first (the music knob reserves F20)."
                             .to_string()
@@ -1349,6 +1364,8 @@ pub fn run() {
             host_macro_run,
             host_macros_load,
             host_macros_save,
+            mac_controls::mac_controls_preview,
+            mac_controls::mac_controls_permission,
             host_remaps_get,
             host_remaps_saved,
             host_remaps_apply,
@@ -1504,11 +1521,11 @@ pub fn run() {
             // has a marker assigned. Done after the menu setup so the
             // plugin is fully initialised. Failure is logged but doesn't
             // block launch — the user can still adopt + re-bind.
-            if let Err(e) = refresh_automation_shortcuts(app.handle()) {
-                tracing::warn!("initial automation shortcut registration failed: {e}");
-            }
             if let Err(error) = mac_controls::initialize(app.handle()) {
                 tracing::warn!(%error, "Mac controls startup needs attention");
+            }
+            if let Err(e) = refresh_automation_shortcuts(app.handle()) {
+                tracing::warn!("initial automation shortcut registration failed: {e}");
             }
             #[cfg(target_os = "macos")]
             if let Some(window) = app.get_webview_window("main") {

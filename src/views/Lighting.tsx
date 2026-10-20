@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useCapabilities } from "../capabilities";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -174,7 +175,7 @@ export function Lighting() {
   }
 
   if (modes === null) {
-    return <p className="text-sm text-fg-2">Loading lighting modes…</p>;
+    return <p className="text-sm text-fg-2">{t("Loading lighting modes…")}</p>;
   }
 
   const hasSecondary = cfg.secondary !== null && cfg.secondary !== undefined;
@@ -183,7 +184,7 @@ export function Lighting() {
   return (
     <>
       <PageHeader
-        title="Lighting"
+        title={t("Lighting")}
         description={
           isCustomMode
             ? "Per-key custom RGB — click any key on the layout below to paint it."
@@ -192,9 +193,7 @@ export function Lighting() {
         action={
           isCustomMode ? null : (
             <div className="flex items-center gap-4">
-              <Toggle checked={autoApply} onChange={setAutoApply}>
-                Auto-apply
-              </Toggle>
+              <Toggle checked={autoApply} onChange={setAutoApply}>{" "}{t("Auto-apply")}{" "}</Toggle>
               <Button variant="primary" onClick={() => void applyNow(cfg)} disabled={busy}>
                 {busy ? "Sending…" : "Apply"}
               </Button>
@@ -204,19 +203,19 @@ export function Lighting() {
       />
 
       <ErrorBanner>{err}</ErrorBanner>
-      {legacy && <p className="mb-5 text-sm text-fg-2">This revision supports the 20 built-in lighting effects. Per-key painting and audio-reactive lighting need a different protocol and are unavailable.</p>}
+      {legacy && <p className="mb-5 text-sm text-fg-2">{t("This revision supports the 20 built-in lighting effects. Per-key painting and audio-reactive lighting need a different protocol and are unavailable.")}</p>}
 
       <div className="grid gap-6">
         <div
           className={["grid gap-6", audioReactive ? "pointer-events-none opacity-50" : ""].join(" ")}
         >
         <Card
-          title="Mode"
+          title={t("Mode")}
           action={
             lastApplied && !audioReactive ? (
-              <span className="text-xs text-fg-3">last applied {lastApplied}</span>
+              <span className="text-xs text-fg-3">{t("last applied")}{" "}{lastApplied}</span>
             ) : audioReactive ? (
-              <span className="text-xs text-fg-3">paused while audio-reactive is on</span>
+              <span className="text-xs text-fg-3">{t("paused while audio-reactive is on")}</span>
             ) : null
           }
         >
@@ -243,7 +242,7 @@ export function Lighting() {
         ) : (
         <>
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <Card title="Color">
+          <Card title={t("Color")}>
             <div className="flex items-center gap-3">
               <input
                 type="color"
@@ -258,19 +257,17 @@ export function Lighting() {
                   const v = e.target.value.replace(/[^0-9a-fA-F]/g, "").toUpperCase().slice(0, 6);
                   updateColor(v);
                 }}
-                placeholder="FFFFFF"
+                placeholder={t("FFFFFF")}
                 className="w-28 font-mono uppercase"
               />
-              <Badge tone="neutral">primary</Badge>
+              <Badge tone="neutral">{t("primary")}</Badge>
             </div>
 
             {!legacy && <div className="mt-5 border-t border-line/60 pt-4">
               <Toggle
                 checked={hasSecondary}
                 onChange={(v) => update("secondary", v ? "000000" : null)}
-              >
-                Secondary color (dual-tone modes)
-              </Toggle>
+              >{" "}{t("Secondary color (dual-tone modes)")}{" "}</Toggle>
               {hasSecondary && (
                 <div className="mt-3 flex items-center gap-3">
                   <input
@@ -289,17 +286,17 @@ export function Lighting() {
                     placeholder="000000"
                     className="w-28 font-mono uppercase"
                   />
-                  <Badge tone="neutral">secondary</Badge>
+                  <Badge tone="neutral">{t("secondary")}</Badge>
                 </div>
               )}
             </div>}
           </Card>
 
           <Card
-            title="Direction"
+            title={t("Direction")}
             action={
               !currentMode?.supports_direction && (
-                <span className="text-xs text-fg-3">ignored for this mode</span>
+                <span className="text-xs text-fg-3">{t("ignored for this mode")}</span>
               )
             }
           >
@@ -322,8 +319,7 @@ export function Lighting() {
             </div>
 
             <div className="mt-5 border-t border-line/60 pt-4">
-              <p className="mb-2 text-xs uppercase tracking-wider text-fg-2">
-                colorMode <span className="ml-1 normal-case text-fg-3">(0 = mono, &gt;0 cycles per mode)</span>
+              <p className="mb-2 text-xs uppercase tracking-wider text-fg-2">{" "}{t("colorMode")}{" "}<span className="ml-1 normal-case text-fg-3">{t("(0 = mono, >0 cycles per mode)")}</span>
               </p>
               <input
                 type="number"
@@ -339,7 +335,7 @@ export function Lighting() {
           </Card>
         </div>
 
-        <Card title="Levels">
+        <Card title={t("Levels")}>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
             <Slider label="Brightness" value={cfg.brightness} max={5} onChange={(v) => update("brightness", v)} />
             <Slider label="Speed" value={cfg.speed} max={5} onChange={(v) => update("speed", v)} />
@@ -360,8 +356,8 @@ export function Lighting() {
         {!legacy && <Card
           title={
             <span className="inline-flex items-center gap-2">
-              <span>Audio-reactive</span>
-              <Badge tone="warn">Alpha</Badge>
+              <span>{t("Audio-reactive")}</span>
+              <Badge tone="warn">{t("Alpha")}</Badge>
             </span>
           }
           action={
@@ -373,26 +369,11 @@ export function Lighting() {
             </Toggle>
           }
         >
-          <p className="text-sm text-fg-2">
-            Taps the macOS system-audio mix, runs an FFT, and paints the keyboard
-            with bass / mids / highs as red / green / blue across vertical zones.
-            While streaming, the firmware sits in <code>custom</code> mode and the
-            controls above are paused.
-          </p>
+          <p className="text-sm text-fg-2">{" "}{t("Taps the macOS system-audio mix, runs an FFT, and paints the keyboard with bass / mids / highs as red / green / blue across vertical zones. While streaming, the firmware sits in")}{" "}<code>{t("custom")}</code>{" "}{t("mode and the controls above are paused.")}{" "}</p>
           <p className="mt-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-fg-1">
-            <strong className="text-amber-300">Experimental — use at your own risk.</strong>
-            <br />
-            Known issues: visible flicker on real music, the wire-level cadence
-            is sometimes faster than the firmware's per-key RGB pipeline can
-            ingest. The toggle below stays disabled until you opt in here,
-            so a casual user can't accidentally enable a feature that looks
-            broken. The opt-in persists across launches.
-          </p>
-          <p className="mt-2 text-xs text-fg-3">
-            First run pops the macOS Screen Recording permission prompt — that's
-            normal, ScreenCaptureKit shares the same TCC bucket even for
-            audio-only capture. Once granted, the toggle works silently.
-          </p>
+            <strong className="text-amber-300">{t("Experimental — use at your own risk.")}</strong>
+            <br />{" "}{t("Known issues: visible flicker on real music, the wire-level cadence is sometimes faster than the firmware's per-key RGB pipeline can ingest. The toggle below stays disabled until you opt in here, so a casual user can't accidentally enable a feature that looks broken. The opt-in persists across launches.")}{" "}</p>
+          <p className="mt-2 text-xs text-fg-3">{" "}{t("First run pops the macOS Screen Recording permission prompt — that's normal, ScreenCaptureKit shares the same TCC bucket even for audio-only capture. Once granted, the toggle works silently.")}{" "}</p>
 
           <div
             className={[
@@ -401,7 +382,7 @@ export function Lighting() {
             ].join(" ")}
           >
             <div>
-              <p className="text-sm text-fg-1">Streaming</p>
+              <p className="text-sm text-fg-1">{t("Streaming")}</p>
               <p className="text-xs text-fg-3">
                 {audioReactive
                   ? "Live — keyboard is following the system audio mix."

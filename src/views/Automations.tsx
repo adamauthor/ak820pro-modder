@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 /**
  * Automations library.
  *
@@ -188,16 +189,12 @@ export function Automations() {
   return (
     <>
       <PageHeader
-        title="Automations"
-        description="Run AppleScripts, macOS Shortcuts, or shell commands from this app. Manual trigger today — a global-hotkey listener for keyboard-side triggers ships in v0.7."
+        title={t("Automations")}
+        description={t("Run AppleScripts, macOS Shortcuts, or shell commands from this app. Manual trigger today — a global-hotkey listener for keyboard-side triggers ships in v0.7.")}
         action={
           <div className="flex gap-2">
-            <Button variant="ghost" onClick={openLibrary} disabled={busy}>
-              📚 Starter library
-            </Button>
-            <Button variant="primary" onClick={startCreate} disabled={busy}>
-              + New automation
-            </Button>
+            <Button variant="ghost" onClick={openLibrary} disabled={busy}>{" "}{t("📚 Starter library")}{" "}</Button>
+            <Button variant="primary" onClick={startCreate} disabled={busy}>{" "}{t("+ New automation")}{" "}</Button>
           </div>
         }
       />
@@ -205,21 +202,14 @@ export function Automations() {
       <ErrorBanner>{err}</ErrorBanner>
 
       {items === null ? (
-        <p className="text-sm text-fg-2">Loading…</p>
+        <p className="text-sm text-fg-2">{t("Loading…")}</p>
       ) : items.length === 0 ? (
         <Card>
           <div className="py-6 text-center">
-            <p className="mb-4 text-sm text-fg-2">
-              Your library is empty. Browse the starter library for 15 ready-made
-              examples, or build your own from scratch.
-            </p>
+            <p className="mb-4 text-sm text-fg-2">{" "}{t("Your library is empty. Browse the starter library for 15 ready-made examples, or build your own from scratch.")}{" "}</p>
             <div className="flex justify-center gap-2">
-              <Button variant="primary" onClick={openLibrary}>
-                📚 Browse starter library
-              </Button>
-              <Button variant="ghost" onClick={startCreate}>
-                Build from scratch
-              </Button>
+              <Button variant="primary" onClick={openLibrary}>{" "}{t("📚 Browse starter library")}{" "}</Button>
+              <Button variant="ghost" onClick={startCreate}>{" "}{t("Build from scratch")}{" "}</Button>
             </div>
           </div>
         </Card>
@@ -295,19 +285,13 @@ function AutomationRow({
             <p className="mb-2 text-sm text-fg-2">{a.description}</p>
           )}
           <p className="line-clamp-2 break-all font-mono text-xs text-fg-3">
-            {a.payload || <span className="italic text-fg-4">(empty)</span>}
+            {a.payload || <span className="italic text-fg-4">{t("(empty)")}</span>}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <Button size="sm" variant="primary" onClick={onRun} disabled={busy}>
-            Run
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onEdit} disabled={busy}>
-            Edit
-          </Button>
-          <Button size="sm" variant="danger" onClick={onDelete} disabled={busy}>
-            Delete
-          </Button>
+          <Button size="sm" variant="primary" onClick={onRun} disabled={busy}>{" "}{t("Run")}{" "}</Button>
+          <Button size="sm" variant="ghost" onClick={onEdit} disabled={busy}>{" "}{t("Edit")}{" "}</Button>
+          <Button size="sm" variant="danger" onClick={onDelete} disabled={busy}>{" "}{t("Delete")}{" "}</Button>
         </div>
       </div>
       {lastRun && (
@@ -316,8 +300,7 @@ function AutomationRow({
             onClick={() => setShowOutput((v) => !v)}
             className="text-xs text-fg-2 hover:text-fg-0"
           >
-            {showOutput ? "Hide" : "Show"} output
-          </button>
+            {showOutput ? "Hide" : "Show"}{" "}{t("output")}{" "}</button>
           {showOutput && (
             <div className="mt-2 space-y-2">
               {lastRun.stdout && (
@@ -331,7 +314,7 @@ function AutomationRow({
                 </pre>
               )}
               {!lastRun.stdout && !lastRun.stderr && (
-                <p className="text-xs text-fg-3">No output captured.</p>
+                <p className="text-xs text-fg-3">{t("No output captured.")}</p>
               )}
             </div>
           )}
@@ -385,7 +368,7 @@ function Editor({
             <input
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              placeholder="Open my dev folder"
+              placeholder={t("Open my dev folder")}
               className="w-full rounded-md border border-line bg-surface-base px-3 py-2 text-sm text-fg-0 outline-none focus:border-accent-500/60"
             />
           </Field>
@@ -394,7 +377,7 @@ function Editor({
             <input
               value={draft.description}
               onChange={(e) => setDraft({ ...draft, description: e.target.value })}
-              placeholder="What this does"
+              placeholder={t("What this does")}
               className="w-full rounded-md border border-line bg-surface-base px-3 py-2 text-sm text-fg-0 outline-none focus:border-accent-500/60"
             />
           </Field>
@@ -418,10 +401,7 @@ function Editor({
           {draft.kind === "shortcut" && (
             <Field label="Installed Shortcuts">
               {shortcuts.length === 0 ? (
-                <p className="text-xs text-fg-3">
-                  No Shortcuts detected. Make sure you're on macOS 12+ and have at
-                  least one Shortcut saved in the Shortcuts.app.
-                </p>
+                <p className="text-xs text-fg-3">{" "}{t("No Shortcuts detected. Make sure you're on macOS 12+ and have at least one Shortcut saved in the Shortcuts.app.")}{" "}</p>
               ) : (
                 <div className="max-h-32 overflow-y-auto rounded-md border border-line bg-surface-base p-2">
                   <ul className="space-y-px">
@@ -473,24 +453,18 @@ function Editor({
 
           {isShell && (
             <div className="rounded-md border border-warn/40 bg-warn/10 px-3 py-2 text-xs text-fg-1">
-              <b>Heads-up:</b> shell commands have no sandboxing. Don't paste anything
-              you wouldn't run in <Mono>Terminal</Mono> yourself.
-            </div>
+              <b>{t("Heads-up:")}</b>{" "}{t("shell commands have no sandboxing. Don't paste anything you wouldn't run in")}{" "}<Mono>{t("Terminal")}</Mono>{" "}{t("yourself.")}{" "}</div>
           )}
         </div>
 
         <footer className="flex items-center justify-end gap-2 border-t border-line px-5 py-3">
-          <Button size="sm" variant="ghost" onClick={onCancel}>
-            Cancel
-          </Button>
+          <Button size="sm" variant="ghost" onClick={onCancel}>{" "}{t("Cancel")}{" "}</Button>
           <Button
             size="sm"
             variant="primary"
             onClick={() => onSave(draft)}
             disabled={!isValid}
-          >
-            Save
-          </Button>
+          >{" "}{t("Save")}{" "}</Button>
         </footer>
       </div>
     </div>
@@ -552,15 +526,11 @@ function StarterLibraryModal({
       >
         <header className="flex items-center justify-between border-b border-line px-5 pb-3 pt-4">
           <div>
-            <h2 className="text-base font-medium text-fg-0">Starter library</h2>
+            <h2 className="text-base font-medium text-fg-0">{t("Starter library")}</h2>
             <p className="mt-0.5 text-xs text-fg-3">
-              {starters.length} curated examples. Click <b>Add</b> to copy one
-              into your library — edit afterwards.
-            </p>
+              {starters.length}{" "}{t("curated examples. Click")}{" "}<b>{t("Add")}</b>{" "}{t("to copy one into your library — edit afterwards.")}{" "}</p>
           </div>
-          <Button size="sm" variant="ghost" onClick={onClose}>
-            Close
-          </Button>
+          <Button size="sm" variant="ghost" onClick={onClose}>{" "}{t("Close")}{" "}</Button>
         </header>
 
         <div className="flex-1 space-y-5 overflow-y-auto px-5 py-4">
@@ -605,16 +575,13 @@ function StarterRow({
           </div>
           <p className="mt-0.5 text-xs text-fg-2">{starter.description}</p>
         </div>
-        <Button size="sm" variant="primary" onClick={onAdopt} disabled={busy}>
-          Add
-        </Button>
+        <Button size="sm" variant="primary" onClick={onAdopt} disabled={busy}>{" "}{t("Add")}{" "}</Button>
       </div>
       <button
         onClick={() => setShowPayload((v) => !v)}
         className="mt-1.5 text-[10px] uppercase tracking-wider text-fg-3 hover:text-fg-1"
       >
-        {showPayload ? "Hide" : "Show"} payload
-      </button>
+        {showPayload ? "Hide" : "Show"}{" "}{t("payload")}{" "}</button>
       {showPayload && (
         <pre className="mt-2 overflow-x-auto rounded-sm border border-line/60 bg-surface-elevated/40 p-2 font-mono text-[11px] leading-snug text-fg-1">
           {starter.payload}

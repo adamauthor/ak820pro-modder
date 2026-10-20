@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 /**
  * Per-key RGB paint surface.
  *
@@ -164,8 +165,8 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
 
   if (remote === null) {
     return (
-      <Card title="Per-key RGB">
-        <p className="text-sm text-fg-2">Reading current LED state…</p>
+      <Card title={t("Per-key RGB")}>
+        <p className="text-sm text-fg-2">{t("Reading current LED state…")}</p>
       </Card>
     );
   }
@@ -173,20 +174,18 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
   return (
     <Card
       kicker="Per-key paint"
-      title="Click any key to paint it"
+      title={t("Click any key to paint it")}
       action={
         <div className="flex items-center gap-2">
           {lastApplied && (
-            <span className="text-xs text-fg-3">applied {lastApplied}</span>
+            <span className="text-xs text-fg-3">{t("applied")}{" "}{lastApplied}</span>
           )}
           <Button
             size="sm"
             variant="ghost"
             onClick={() => void refresh()}
             disabled={busy}
-          >
-            Reload
-          </Button>
+          >{" "}{t("Reload")}{" "}</Button>
           <Button
             size="sm"
             variant={autoApply || !dirty ? "ghost" : "primary"}
@@ -202,7 +201,7 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
 
       {/* paint controls */}
       <div className="mb-4 flex flex-wrap items-center gap-3 rounded-md border border-line/60 bg-surface-elevated/40 px-3 py-2">
-        <span className="kicker">Brush</span>
+        <span className="kicker">{t("Brush")}</span>
         <input
           type="color"
           value={"#" + paintColor}
@@ -220,21 +219,15 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
           className="w-20 rounded-sm border border-line bg-surface-base px-2 py-0.5 font-mono text-xs uppercase text-fg-0 outline-none focus:border-accent-500/60"
         />
         <span className="text-xs text-fg-3">·</span>
-        <Button size="sm" variant="ghost" onClick={() => fillAll(paintColor)} disabled={busy}>
-          Fill all
-        </Button>
-        <Button size="sm" variant="ghost" onClick={() => clearAll()} disabled={busy}>
-          Clear all
-        </Button>
+        <Button size="sm" variant="ghost" onClick={() => fillAll(paintColor)} disabled={busy}>{" "}{t("Fill all")}{" "}</Button>
+        <Button size="sm" variant="ghost" onClick={() => clearAll()} disabled={busy}>{" "}{t("Clear all")}{" "}</Button>
         <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-fg-2">
           <input
             type="checkbox"
             checked={autoApply}
             onChange={(e) => setAutoApply(e.target.checked)}
             className="h-3.5 w-3.5 accent-accent-500"
-          />
-          Auto-apply
-        </label>
+          />{" "}{t("Auto-apply")}{" "}</label>
       </div>
 
       <PaintSurface
@@ -247,11 +240,7 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
         }}
       />
 
-      <p className="mt-4 border-t border-line/60 pt-3 text-xs text-fg-3">
-        Per-key RGB is the lighting mode at byte <Mono>0x80</Mono>. The 20
-        animated modes ignore this buffer; switching the lighting mode away
-        from <Badge tone="accent">custom</Badge> will hide your paint until
-        you switch back. Selected slot:{" "}
+      <p className="mt-4 border-t border-line/60 pt-3 text-xs text-fg-3">{" "}{t("Per-key RGB is the lighting mode at byte")}{" "}<Mono>0x80</Mono>{t(". The 20 animated modes ignore this buffer; switching the lighting mode away from")}{" "}<Badge tone="accent">{t("custom")}</Badge>{" "}{t("will hide your paint until you switch back. Selected slot:")}{" "}
         <Mono>{selected === null ? "—" : `#${selected}`}</Mono>.
       </p>
     </Card>

@@ -1,3 +1,4 @@
+import { useI18n } from "./i18n";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Automations } from "./views/Automations";
@@ -12,7 +13,7 @@ import { CapabilityContext, DeviceCapabilities, UnavailableFeature } from "./cap
 import { HostKeymap, HostMacros } from "./views/HostKeyboard";
 import { LegacySystem } from "./views/LegacySystem";
 import { MacControls, UsbRequired } from "./views/MacControls";
-import { MacControlsContext, MacStatus } from "./mac-controls";
+import { MacControlsContext, MacStatus, invokeMac } from "./mac-controls";
 import { Music } from "lucide-react";
 import { ICLOUD_SYNC_ENABLED_KEY } from "./components/SyncCard";
 import {
@@ -42,10 +43,10 @@ type Tab =
 const ICON_PROPS = { size: 16, strokeWidth: 1.6 } as const;
 
 const NAV: NavItem<Tab>[] = [
+  { id: "maccontrols", label: "Mac controls", icon: <Music {...ICON_PROPS} /> },
   { id: "connect", label: "Connectivity", icon: <Plug {...ICON_PROPS} /> },
   { id: "lighting", label: "Lighting", icon: <Bulb {...ICON_PROPS} /> },
   { id: "system", label: "System", icon: <Settings {...ICON_PROPS} /> },
-  { id: "maccontrols", label: "Mac controls", icon: <Music {...ICON_PROPS} /> },
   { id: "keymap", label: "Keymap", icon: <Keyboard {...ICON_PROPS} /> },
   { id: "macros", label: "Macros", icon: <Macro {...ICON_PROPS} /> },
   { id: "automations", label: "Automations", icon: <Automation {...ICON_PROPS} /> },
@@ -60,13 +61,14 @@ interface ProbeReport {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("connect");
+  useI18n();
+  const [tab, setTab] = useState<Tab>("maccontrols");
   const [capabilities, setCapabilities] = useState<DeviceCapabilities | null>(null);
   const [probe, setProbe] = useState<ProbeReport | null>(null);
   const [mac, setMac] = useState<MacStatus | null>(null);
   useEffect(() => {
     let alive = true;
-    const refresh = () => { void invoke<MacStatus>("mac_controls_status").then(value => { if (alive) setMac(value); }).catch(() => {}); };
+    const refresh = () => { void invokeMac<MacStatus>("mac_controls_status").then(value => { if (alive) setMac(value); }).catch(() => {}); };
     refresh();
     const timer = window.setInterval(refresh, 4000);
     window.addEventListener("mac-controls-updated", refresh);
@@ -119,7 +121,7 @@ export default function App() {
 
   const reconnect = async () => {
     try { await invoke("force_reconnect"); } catch { /* ignored */ }
-    try { setMac(await invoke<MacStatus>("mac_controls_refresh")); } catch { /* native status explains errors */ }
+    try { setMac(await invokeMac<MacStatus>("mac_controls_refresh")); } catch { /* native status explains errors */ }
   };
   const wirelessOnly = !probe?.connected && mac?.devices.some(device => device.transport === "Bluetooth");
   const hostKeyboard = mac?.supported && (!probe?.connected || capabilities?.protocol === "legacy_feature");
@@ -139,7 +141,7 @@ export default function App() {
       {tab === "connect" && <Connect onReconnect={reconnect} />}
       {tab === "lighting" && (wirelessOnly ? <UsbRequired /> : <Lighting />)}
       {tab === "system" && (wirelessOnly ? <UsbRequired /> : capabilities?.protocol === "legacy_feature" ? <LegacySystem /> : <System />)}
-      {tab === "maccontrols" && <MacControls />}
+      <div hidden={tab !== "maccontrols"}><MacControls visible={tab === "maccontrols"} /></div>
       {tab === "keymap" && (hostKeyboard ? <HostKeymap /> : capabilities && !capabilities.keymap ? <UnavailableFeature name="Onboard key remapping" /> : <Keymap />)}
       {tab === "macros" && (hostKeyboard ? <HostMacros /> : capabilities && !capabilities.macros ? <UnavailableFeature name="Onboard macros" /> : <Macros />)}
       {tab === "automations" && <Automations />}

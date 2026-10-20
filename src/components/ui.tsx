@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import type { PropsWithChildren, ReactNode } from "react";
 
 // ---------------------------------------------------------------------------
@@ -19,7 +20,7 @@ export function Card({
   return (
     <section
       className={
-        "relative rounded-lg border border-line bg-surface-elevated/85 shadow-card " +
+        "relative rounded-xl border border-line-subtle bg-surface-elevated " +
         className
       }
     >
@@ -28,7 +29,7 @@ export function Card({
           <div>
             {kicker && <p className="kicker mb-1">{kicker}</p>}
             {title && (
-              <h2 className="text-base font-medium tracking-tight text-fg-0">{title}</h2>
+              <h2 className="text-base font-medium tracking-tight text-fg-0">{typeof title === "string" ? t(title) : title}</h2>
             )}
           </div>
           {action && <div className="shrink-0">{action}</div>}
@@ -92,7 +93,7 @@ export function Button({
       className={`${BTN_BASE} ${BTN_VARIANTS[variant]} ${BTN_SIZES[size]} ${className}`}
       {...rest}
     >
-      {children}
+      {typeof children === "string" ? t(children) : children}
     </button>
   );
 }
@@ -117,7 +118,7 @@ export function KVList({
 function Row({ label, value, mono }: { label: string; value: ReactNode; mono?: boolean }) {
   return (
     <>
-      <dt className="text-fg-2">{label}</dt>
+      <dt className="text-fg-2">{t(label)}</dt>
       <dd className={"m-0 text-fg-0 " + (mono ? "font-mono tabular text-[13px]" : "")}>
         {value}
       </dd>
@@ -251,7 +252,7 @@ export function ErrorBanner({ children }: PropsWithChildren) {
   return (
     <div className="mb-5 flex items-start gap-3 rounded-md border border-bad/40 bg-bad-soft px-4 py-3 text-sm text-bad">
       <span className="mt-0.5 h-2 w-2 shrink-0 rounded-full bg-bad" />
-      <span className="font-mono tabular leading-relaxed">{children}</span>
+      <span className="font-mono tabular leading-relaxed">{typeof children === "string" ? t(children) : children}</span>
     </div>
   );
 }

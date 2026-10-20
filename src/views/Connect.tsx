@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { DeviceInfo, ProbeReport } from "../types";
@@ -45,13 +46,11 @@ export function Connect({ onReconnect }: { onReconnect?: () => void }) {
   return (
     <>
       <PageHeader
-        title="Connectivity"
-        description="HID enumeration and control-interface health."
+        title={t("Connectivity")}
+        description={t("HID enumeration and control-interface health.")}
         action={
           <div className="flex gap-2">
-            <Button onClick={reconnect} disabled={busy} title="Drop cached HID handle and re-open the device">
-              Reconnect
-            </Button>
+            <Button onClick={reconnect} disabled={busy} title={t("Drop cached HID handle and re-open the device")}>{" "}{t("Reconnect")}{" "}</Button>
             <Button variant="primary" onClick={refresh} disabled={busy}>
               {busy ? "Probing…" : "Re-probe"}
             </Button>
@@ -62,11 +61,11 @@ export function Connect({ onReconnect }: { onReconnect?: () => void }) {
       <ErrorBanner>{err}</ErrorBanner>
 
       <div className="grid gap-6">
-        {bluetooth.length > 0 && <Card title="Bluetooth keyboard connected">
+        {bluetooth.length > 0 && <Card title={t("Bluetooth keyboard connected")}>
           <p className="text-sm">{bluetooth.map(device => device.product).join(", ")}</p>
-          <p className="mt-2 text-sm text-fg-2">Mac controls, key mappings and macros are available. Connect USB to change lighting, system settings or TFT images.</p>
+          <p className="mt-2 text-sm text-fg-2">{t("Mac controls, key mappings and macros are available. Connect USB to change lighting, system settings or TFT images.")}</p>
         </Card>}
-        <Card title="Control interface">
+        <Card title={t("Control interface")}>
           {probe === null ? (
             <p className="text-sm text-fg-2">{bluetooth.length ? "USB configuration interface is not connected." : "Waiting on a vendor interface…"}</p>
           ) : (
@@ -74,7 +73,7 @@ export function Connect({ onReconnect }: { onReconnect?: () => void }) {
               rows={[
                 {
                   label: "Status",
-                  value: probe.connected ? <Badge tone="good">connected</Badge> : <Badge tone="bad">offline</Badge>,
+                  value: probe.connected ? <Badge tone="good">{t("connected")}</Badge> : <Badge tone="bad">{t("offline")}</Badge>,
                 },
                 { label: "Product", value: prettyProduct(probe.product) },
                 { label: "HID interface", value: <Mono>{probe.interface}</Mono>, mono: true },
@@ -89,7 +88,7 @@ export function Connect({ onReconnect }: { onReconnect?: () => void }) {
 
         <Card title={`Detected HID endpoints${devices ? ` · ${devices.length}` : ""}`}>
           {devices === null ? (
-            <p className="text-sm text-fg-2">Scanning…</p>
+            <p className="text-sm text-fg-2">{t("Scanning…")}</p>
           ) : devices.length === 0 ? (
             <p className="text-sm text-fg-2">{bluetooth.length ? "Bluetooth is active. USB endpoints appear when the keyboard is connected by cable." : "No AK820 USB candidates found."}</p>
           ) : (
@@ -97,11 +96,11 @@ export function Connect({ onReconnect }: { onReconnect?: () => void }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-xs uppercase tracking-wider text-fg-2">
-                    <th className="px-2 py-2 font-normal">iface</th>
-                    <th className="px-2 py-2 font-normal">usage page</th>
-                    <th className="px-2 py-2 font-normal">vid:pid</th>
-                    <th className="px-2 py-2 font-normal">product</th>
-                    <th className="px-2 py-2 font-normal">role</th>
+                    <th className="px-2 py-2 font-normal">{t("iface")}</th>
+                    <th className="px-2 py-2 font-normal">{t("usage page")}</th>
+                    <th className="px-2 py-2 font-normal">{t("vid:pid")}</th>
+                    <th className="px-2 py-2 font-normal">{t("product")}</th>
+                    <th className="px-2 py-2 font-normal">{t("role")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -120,7 +119,7 @@ export function Connect({ onReconnect }: { onReconnect?: () => void }) {
                         <td className="px-2 py-2">{d.product ?? "—"}</td>
                         <td className="px-2 py-2">
                           {isControl ? (
-                            <Badge tone="accent">control</Badge>
+                            <Badge tone="accent">{t("control")}</Badge>
                           ) : (
                             <span className="text-xs text-fg-3">{d.is_tft ? "TFT upload" : "standard HID"}</span>
                           )}

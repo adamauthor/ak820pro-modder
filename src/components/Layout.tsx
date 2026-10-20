@@ -1,3 +1,4 @@
+import { t, useI18n } from "../i18n";
 import { useEffect, useState, type PropsWithChildren, type ReactNode } from "react";
 import { BatteryBar, prettyProduct } from "./ui";
 import { APP_CREDIT, APP_HOMEPAGE } from "../version";
@@ -50,11 +51,12 @@ export function Layout<T extends string>({
   wide?: boolean;
 }>) {
   const theme = useTheme();
+  const { language, setLanguage } = useI18n();
   const { layoutId, layout, setLayoutId } = useLayout();
   return (
     <div className="flex h-screen w-screen overflow-hidden">
       {/* Sidebar */}
-      <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-surface-surface/80">
+      <aside className="flex w-56 shrink-0 flex-col border-r border-line bg-surface-surface">
         {/* Brand */}
         <div className="px-5 pt-5 pb-4">
           <div className="flex items-center gap-2.5">
@@ -86,17 +88,17 @@ export function Layout<T extends string>({
                   >
                     {/* Active rail */}
                     {isActive && (
-                      <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r-full bg-accent-500" />
+                      <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-r-full bg-accent-400" />
                     )}
                     <span
                       className={[
                         "flex h-4 w-4 items-center justify-center",
-                        isActive ? "text-accent-300" : "text-fg-3 group-hover:text-fg-1",
+                        isActive ? "text-fg-0" : "text-fg-3 group-hover:text-fg-1",
                       ].join(" ")}
                     >
                       {item.icon}
                     </span>
-                    <span className="flex-1">{item.label}</span>
+                    <span className="flex-1">{t(item.label)}</span>
                     {item.comingSoon && (
                       <span className="rounded-sm bg-surface-base px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-fg-3">
                         soon
@@ -117,7 +119,7 @@ export function Layout<T extends string>({
               <span className="truncate text-xs text-fg-1">
                 {connection?.connected
                   ? prettyProduct(connection.product)
-                  : "Disconnected"}
+                  : t("Disconnected")}
               </span>
             </div>
             {!connection?.connected && onReconnect && (
@@ -125,29 +127,30 @@ export function Layout<T extends string>({
                 onClick={onReconnect}
                 className="rounded-sm border border-line bg-surface-elevated/40 px-1.5 py-0.5 text-2xs font-medium text-fg-1 transition hover:border-accent-500/60 hover:bg-accent-glow hover:text-fg-0"
               >
-                Reconnect
+                {t("Reconnect")}
               </button>
             )}
           </div>
           {connection?.connected && battery && (
             <BatteryBar level={battery.level} charging={battery.charging} compact />
           )}
-          <div className="mt-3 flex items-center justify-between gap-2 border-t border-line/60 pt-2.5">
+          <div className="mt-3 flex flex-col items-start justify-between gap-3 border-t border-line/60 pt-2.5">
             <a
               href={APP_HOMEPAGE}
               target="_blank"
               rel="noopener noreferrer"
               className="text-[10px] leading-tight text-fg-3 transition-colors hover:text-fg-1"
-              title="Open the project on GitHub"
+              title={t("Open the project on GitHub", "Открыть проект на GitHub")}
             >
               {APP_CREDIT}
             </a>
-            <div className="flex items-center gap-1.5">
+            <div className="flex w-full items-center justify-between gap-1.5">
+              <button aria-label={t("Language", "Язык")} className="rounded border border-line px-1.5 py-1 text-[10px] text-fg-2" onClick={() => setLanguage(language === "ru" ? "en" : "ru")}>{language.toUpperCase()}</button>
               <button
                 onClick={toggleTheme}
                 className="flex h-6 w-6 items-center justify-center rounded-sm border border-line bg-surface-base text-fg-2 transition hover:border-accent-500/60 hover:bg-accent-glow hover:text-fg-0"
-                title={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
-                aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+                title={theme === "dark" ? t("Light theme", "Светлая тема") : t("Dark theme", "Тёмная тема")}
+                aria-label={theme === "dark" ? t("Light theme", "Светлая тема") : t("Dark theme", "Тёмная тема")}
               >
                 {theme === "dark"
                   ? <Sun size={12} strokeWidth={1.8} />
@@ -158,7 +161,7 @@ export function Layout<T extends string>({
                 onChange={(e) => setLayoutId(e.target.value as LayoutId)}
                 title={`Active physical layout: ${layout.displayName}. ${layout.description}`}
                 className="appearance-none rounded-sm border border-line bg-surface-base px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-fg-3 hover:border-accent-500/60 hover:text-fg-0 focus:outline-none focus:ring-1 focus:ring-accent-500/60"
-                aria-label="Active keyboard layout"
+                aria-label={t("Keyboard layout", "Раскладка клавиатуры")}
               >
                 {Object.entries(LAYOUTS).map(([id, l]) =>
                   l ? (
@@ -177,8 +180,8 @@ export function Layout<T extends string>({
       <main className="relative flex-1 overflow-y-auto">
         <div
           className={[
-            "mx-auto px-10 pb-16 pt-10",
-            wide ? "max-w-none" : "max-w-[960px]",
+            "mx-auto px-7 pb-12 pt-9",
+            wide ? "max-w-none" : "max-w-[1080px]",
           ].join(" ")}
         >
           {children}
@@ -205,9 +208,9 @@ export function PageHeader({
     <header className="mb-8 flex items-end justify-between gap-6">
       <div>
         {kicker && <p className="kicker mb-2">{kicker}</p>}
-        <h1 className="text-3xl font-semibold tracking-tight text-fg-0">{title}</h1>
+        <h1 className="text-3xl font-semibold tracking-tight text-fg-0">{t(title)}</h1>
         {description && (
-          <p className="mt-2 max-w-prose text-sm text-fg-2">{description}</p>
+          <p className="mt-2 max-w-prose text-sm text-fg-2">{typeof description === "string" ? t(description) : description}</p>
         )}
       </div>
       {action && <div className="shrink-0 pb-1">{action}</div>}

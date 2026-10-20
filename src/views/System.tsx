@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Badge, BatteryBar, Button, Card, ErrorBanner, KVList, Mono, formatInt, hex4 } from "../components/ui";
@@ -102,8 +103,8 @@ export function System() {
   return (
     <>
       <PageHeader
-        title="System"
-        description="Live firmware, battery, and onboard settings."
+        title={t("System")}
+        description={t("Live firmware, battery, and onboard settings.")}
         action={
           <Button variant="primary" onClick={refresh} disabled={busy}>
             {busy ? "Reading…" : "Refresh"}
@@ -115,9 +116,9 @@ export function System() {
 
       <div className="grid gap-6">
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <Card title="Device">
+          <Card title={t("Device")}>
             {info === null ? (
-              <p className="text-sm text-fg-2">Reading…</p>
+              <p className="text-sm text-fg-2">{t("Reading…")}</p>
             ) : (
               <KVList
                 rows={[
@@ -135,15 +136,15 @@ export function System() {
                   },
                   {
                     label: "Profile",
-                    value: <Badge tone="accent">slot {info.current_profile}</Badge>,
+                    value: <Badge tone="accent">{t("slot")}{" "}{info.current_profile}</Badge>,
                   },
                   {
                     label: "Macro space",
-                    value: <Mono>{formatInt(info.macro_space_size)} bytes</Mono>,
+                    value: <Mono>{formatInt(info.macro_space_size)}{" "}{t("bytes")}</Mono>,
                   },
                   {
                     label: "TFT capacity",
-                    value: <Mono>{info.tft_max_frames} frames</Mono>,
+                    value: <Mono>{info.tft_max_frames}{" "}{t("frames")}</Mono>,
                   },
                   {
                     label: "Frame version",
@@ -154,13 +155,12 @@ export function System() {
             )}
           </Card>
 
-          <Card title="Sleep timer">
+          <Card title={t("Sleep timer")}>
             {gm === null ? (
-              <p className="text-sm text-fg-2">Reading…</p>
+              <p className="text-sm text-fg-2">{t("Reading…")}</p>
             ) : (
               <>
-                <p className="mb-4 text-sm text-fg-2">
-                  Current:{" "}
+                <p className="mb-4 text-sm text-fg-2">{" "}{t("Current:")}{" "}
                   <span className="font-mono text-fg-0">
                     {presets.find((p) => p.value === gm.sleep_time)?.label ?? `value ${gm.sleep_time}`}
                   </span>
@@ -178,18 +178,16 @@ export function System() {
                     </Button>
                   ))}
                 </div>
-                <p className="mt-4 border-t border-line/60 pt-3 text-xs text-fg-3">
-                  After a write the keyboard's value is read back to confirm — UI updates only after the round-trip succeeds.
-                </p>
+                <p className="mt-4 border-t border-line/60 pt-3 text-xs text-fg-3">{" "}{t("After a write the keyboard's value is read back to confirm — UI updates only after the round-trip succeeds.")}{" "}</p>
               </>
             )}
           </Card>
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-          <Card title="Other settings">
+          <Card title={t("Other settings")}>
             {gm === null ? (
-              <p className="text-sm text-fg-2">Reading…</p>
+              <p className="text-sm text-fg-2">{t("Reading…")}</p>
             ) : (
               <KVList
                 rows={[
