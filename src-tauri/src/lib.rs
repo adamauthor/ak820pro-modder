@@ -1359,6 +1359,7 @@ pub fn run() {
             mac_controls_refresh,
             mac_controls_save,
             mac_controls_action,
+            mac_controls::mac_controls_music_access,
             host_keyboard_status,
             host_macro_stop,
             host_macro_run,

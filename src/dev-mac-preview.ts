@@ -6,6 +6,8 @@ const snapshot: MacStatus = {
   youtube_supported: true,
   accessibility: true,
   hotkey_active: true,
+  music_busy: false,
+  music_automation: "not_needed",
   devices: [
     { profile: "bluetooth-1", product: "AK820 5.1-1", transport: "Bluetooth" },
   ],

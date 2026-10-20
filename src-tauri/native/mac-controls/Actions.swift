@@ -53,16 +53,33 @@ func secondsFromClock(_ value: String) -> Double? {
     return seconds
 }
 
-// A normalized progress slider needs elapsed/total time before converting seconds.
-// A missing or remaining-time description is deliberately not guessed.
+// WebKit describes a song timeline as e.g. "1 Minutes 5 Seconds of 4 Minutes
+// 1 Seconds". Parse explicit units as well as clocks; never infer seconds from
+// a bare percentage or a remaining-time label.
+func durationSeconds(_ value: String) -> Double? {
+    if let clock = secondsFromClock(value) { return clock }
+    let lower = value.lowercased(), ns = value.lowercased() as NSString
+    let expression = try! NSRegularExpression(pattern: #"([0-9]+(?:\.[0-9]+)?)\s*(hours?|minutes?|seconds?|час(?:а|ов)?|минут(?:а|ы)?|секунд(?:а|ы)?)\b"#)
+    let matches = expression.matches(in: lower, range: NSRange(location: 0, length: ns.length))
+    guard !matches.isEmpty else { return nil }
+    var result: Double = 0
+    for match in matches {
+        guard let amount = Double(ns.substring(with: match.range(at: 1))) else { return nil }
+        let unit = ns.substring(with: match.range(at: 2))
+        result += amount * (unit.hasPrefix("hour") || unit.hasPrefix("час") ? 3600 : unit.hasPrefix("minute") || unit.hasPrefix("минут") ? 60 : 1)
+    }
+    return result
+}
 func timelineStep(value: Double, maximum: Double, description: String?, delta: Double) -> Double? {
     guard let description, maximum > 0, value >= 0 else { return nil }
     let lower = description.lowercased()
     guard !lower.contains("remaining"), !lower.contains("осталось"), !lower.contains("−"), !lower.contains("-") else { return nil }
+    let parts = lower.replacingOccurrences(of: " out of ", with: " of ").replacingOccurrences(of: " из ", with: " of ").components(separatedBy: " of ")
+    if parts.count == 2, let total = durationSeconds(parts[1]), total > 0 { return delta * maximum / total }
     let expression = try! NSRegularExpression(pattern: #"\b[0-9]{1,2}:[0-9]{2}(?::[0-9]{2})?\b"#)
     let ns = description as NSString
     let times = expression.matches(in: description, range: NSRange(location: 0, length: ns.length)).compactMap { secondsFromClock(ns.substring(with: $0.range)) }
     if times.count == 2, times[1] > 0 { return delta * maximum / times[1] }
-    if times.count == 1, times[0] > 0, value > 0 { return delta * value / times[0] }
+    if let elapsed = durationSeconds(description), elapsed > 0, value > 0 { return delta * value / elapsed }
     return nil
 }

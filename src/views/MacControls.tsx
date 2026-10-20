@@ -720,6 +720,65 @@ export function MacControls({ visible = true }: { visible?: boolean }) {
                 </p>
               </div>
             )}
+            {config.music_service !== "youtube_music" && (
+              <Card
+                title={t(
+                  "Background playback & seeking",
+                  "Управление в фоне и перемотка",
+                )}
+              >
+                {config.music_service === status.config.music_service &&
+                status.music_automation === "allowed" ? (
+                  <div className="flex items-center gap-3 text-sm">
+                    <ShieldCheck size={20} className="text-good" />
+                    <span>
+                      {t(
+                        "Player control is allowed, including with its window closed.",
+                        "Управление плеером разрешено, в том числе при закрытом окне.",
+                      )}
+                    </span>
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-sm text-fg-2">
+                      {t(
+                        "Allow control of the selected player for accurate seeking and playback with its window closed. macOS asks separately for Apple Music and Spotify.",
+                        "Разрешите управление выбранным плеером для точной перемотки и работы с закрытым окном. macOS запрашивает доступ отдельно для Apple Music и Spotify.",
+                      )}
+                    </p>
+                    <Button
+                      className="mt-4"
+                      disabled={
+                        busy ||
+                        dirty ||
+                        status.music_busy ||
+                        status.music_automation === "not_installed"
+                      }
+                      onClick={() =>
+                        void run("mac_controls_music_access", {
+                          settings: status.music_automation === "denied",
+                        })
+                      }
+                    >
+                      {status.music_automation === "denied"
+                        ? t("Open permissions", "Открыть разрешения")
+                        : t(
+                            "Allow player control",
+                            "Разрешить управление плеером",
+                          )}
+                    </Button>
+                    {dirty && (
+                      <p className="mt-2 text-xs text-fg-2">
+                        {t(
+                          "Save your player selection first.",
+                          "Сначала сохраните выбор плеера.",
+                        )}
+                      </p>
+                    )}
+                  </>
+                )}
+              </Card>
+            )}
             <Card title={t("Playback behavior", "Как управлять музыкой")}>
               <SwitchRow
                 checked={config.follow_playing}
@@ -733,20 +792,48 @@ export function MacControls({ visible = true }: { visible?: boolean }) {
                   "Работает с этими тремя приложениями. Если ничего не играет, используется выбранный сервис. Выключите, чтобы всегда управлять только им.",
                 )}
               />
-              <div className="mt-4 flex flex-wrap items-center gap-3">
-                <Button
-                  disabled={busy || dirty || !advanced || !status.accessibility}
-                  onClick={() =>
-                    void run("mac_controls_action", { liked: false })
-                  }
-                >
-                  <Headphones size={14} />
-                  {t("Test play / pause", "Проверить воспроизведение / паузу")}
-                </Button>
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                {(
+                  [
+                    ["seek_backward", "−5 s", "−5 с"],
+                    ["previous", "Previous", "Предыдущий"],
+                    ["toggle", "Play / pause", "Воспроизведение / пауза"],
+                    ["next", "Next", "Следующий"],
+                    ["seek_forward", "+5 s", "+5 с"],
+                  ] as const
+                ).map(([action, en, ru]) => (
+                  <Button
+                    key={action}
+                    disabled={
+                      busy ||
+                      status.music_busy ||
+                      dirty ||
+                      !advanced ||
+                      !status.accessibility
+                    }
+                    title={
+                      action === "seek_backward"
+                        ? t("Seek backward 5 seconds", "Назад на 5 секунд")
+                        : action === "seek_forward"
+                          ? t("Seek forward 5 seconds", "Вперёд на 5 секунд")
+                          : undefined
+                    }
+                    onClick={() =>
+                      void run("mac_controls_action", { liked: false, action })
+                    }
+                  >
+                    {action === "toggle" && <Headphones size={14} />}
+                    {t(en, ru)}
+                  </Button>
+                ))}
                 {config.music_service === "youtube_music" && (
                   <Button
                     disabled={
-                      busy || dirty || !advanced || !status.accessibility
+                      busy ||
+                      status.music_busy ||
+                      dirty ||
+                      !advanced ||
+                      !status.accessibility
                     }
                     onClick={() =>
                       void run("mac_controls_action", { liked: true })

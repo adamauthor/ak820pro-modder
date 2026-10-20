@@ -2,4 +2,5 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
     <key>LSUIElement</key><true/>
+    <key>NSAppleEventsUsageDescription</key><string>Control playback and seeking in your selected music app, including when its window is closed. Only Apple Music and Spotify are supported.</string>
 </dict></plist>

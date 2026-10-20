@@ -153,17 +153,31 @@ Each card reports installation separately from the saved preference. The optiona
 player, remembers that paused player for resume, and otherwise falls back to the
 preferred service. Disable it to address the selected app exclusively.
 
-Playback uses identified Accessibility transport controls. No generic media key
+Playback uses identified Accessibility transport controls, or the selected
+native player’s documented Apple Events after an explicit Automation grant. No generic media key
 is used by custom mode, so an absent or closed YouTube Music window cannot select
 Apple Music as macOS's default media handler. A closed window receives an explicit
 Launch Services reopen request. YouTube Music retains its confirmed Liked Music
 fallback. Spotify and Apple Music resume an existing queue; an empty queue or
 sign-in screen requires choosing a track in that app. Their subscriptions and
-account access are not managed by Modder. No new Automation permission or music
-account credentials are needed.
+account access are not managed by Modder. Apple Music and Spotify offer an explicit, optional Automation grant for direct
+playback and seeking with closed windows. The application sends fixed Apple
+Events to these two applications, without running scripts or handling music
+account credentials. YouTube Music retains its Accessibility path.
 
 The standalone **System play / pause** mode intentionally retains the macOS
 media-key behavior. Select custom mode for explicit service routing.
 
 The USB protocol, TFT writer, lighting packets and firmware gates are unchanged
 by the 0.8 host-controls update. No Bluetooth vendor feature report is invented.
+
+
+The Music tab includes previous/next, play/pause and five-second seek buttons,
+which exercise the same controller used by physical gestures. Native-player
+Automation is checked without prompting during status reads. A permission dialog
+is requested only by **Allow player control**; revocation reports a clear error.
+Already-running players are addressed by PID, so reading another player's state
+cannot launch it. YouTube Music's WebKit seek control is an `AXProgressIndicator`
+and its spoken elapsed/total description is parsed explicitly (English/Russian).
+Native Music/Spotify event codes are taken from their shipped scripting
+interfaces; Spotify 1.3.5.3058 was inspected without installation or execution.

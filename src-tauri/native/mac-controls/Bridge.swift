@@ -190,7 +190,7 @@ final class NativeControls: NSObject {
     }
     func snapshot() -> [String: Any] {
         return ["supported": true, "youtube_supported": true, "accessibility": AXIsProcessTrusted() && CGPreflightPostEventAccess(),
-            "hotkey_active": !hotkeys.isEmpty, "devices": jsonValue(devices), "youtube_apps": jsonValue(apps),
+            "hotkey_active": !hotkeys.isEmpty, "music_busy": controller.isBusy, "music_automation": musicAutomationPermission(config?.music_service ?? "youtube_music"), "devices": jsonValue(devices), "youtube_apps": jsonValue(apps),
             "youtube_app_id": youtubeBundle.isEmpty ? NSNull() : youtubeBundle as Any,
             "installed_apps": jsonValue(installed), "active_app": activeBundle as Any? ?? NSNull(),
             "active_profile": activeProfile?.id as Any? ?? NSNull(), "preview": preview,
@@ -215,9 +215,11 @@ public func ak820MacControlsRequest(_ input: UnsafePointer<CChar>) -> UnsafeMuta
         switch request["operation"] as? String {
         case "configure": try controls.configure(request)
         case "refresh": controls.lastError = nil; controls.apps = youtubeApps(); controls.installed = installedApplications(); try controls.refresh(force: true)
-        case "press", "liked":
+        case "press", "liked", "action":
             guard controls.advanced else { throw MusicError.failed("Enable custom knob controls first") }
-            controls.controller.perform(request["operation"] as? String == "liked" ? "liked" : "toggle")
+            controls.controller.perform(request["operation"] as? String == "action" ? request["action"] as? String ?? "toggle" : request["operation"] as? String == "liked" ? "liked" : "toggle")
+        case "music_access": controls.controller.requestMusicAccess()
+        case "automation_settings": NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
         case "preview":
             guard controls.advanced else { throw MusicError.failed("Save custom knob controls before testing") }
             controls.cancelClicks(); controls.previewUntil = request["enabled"] as? Bool == true ? ProcessInfo.processInfo.systemUptime + 30 : 0; controls.events = []
@@ -300,6 +302,17 @@ public func ak820MacControlsSelftest() -> Int32 {
               timelineStep(value: 0, maximum: 100, description: "0:00 of 4:00", delta: 5) == 5.0 / 2.4,
               timelineStep(value: 50, maximum: 100, description: "−2:00 remaining", delta: 5) == nil,
               timelineStep(value: 50, maximum: 100, description: nil, delta: 5) == nil else { return 20 }
+        guard durationSeconds("1 Minutes 5 Seconds") == 65,
+              durationSeconds("1 минута 5 секунд") == 65,
+              timelineStep(value: 65, maximum: 241, description: "1 Minutes 5 Seconds of 4 Minutes 1 Seconds", delta: 5) == 5,
+              timelineStep(value: 0, maximum: 241, description: "0 Seconds of 4 Minutes 1 Seconds", delta: -5) == -5,
+              timelineStep(value: 25, maximum: 100, description: "1:00 / 4:00", delta: 5) == 5.0 / 2.4 else { return 21 }
+        let specifier = musicProperty("pPos")
+        guard specifier.descriptorType == typeObjectSpecifier,
+              specifier.forKeyword(AEKeyword(keyAEKeyData))?.typeCodeValue == fourCC("pPos"),
+              nativeMusicBundle("apple_music") == "com.apple.Music",
+              nativeMusicBundle("youtube_music") == nil,
+              nativeMusicBundle("arbitrary.bundle") == nil else { return 22 }
         return 0
     } catch { return 6 }
 }

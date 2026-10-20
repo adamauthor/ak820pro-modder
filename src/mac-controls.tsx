@@ -46,6 +46,14 @@ export interface MacStatus {
   youtube_supported: boolean;
   accessibility: boolean;
   hotkey_active: boolean;
+  music_busy: boolean;
+  music_automation:
+    | "allowed"
+    | "ask"
+    | "denied"
+    | "not_needed"
+    | "not_installed"
+    | "unavailable";
   devices: { profile: string; product: string; transport: string }[];
   youtube_apps: { id: string; name: string }[];
   youtube_app_id: string | null;

@@ -1,6 +1,12 @@
 import { legacyRussian } from "./legacy-ru";
 export const russian: Record<string, string> = {
   ...legacyRussian,
+  "Player control allowed": "Управление плеером разрешено",
+  "Allow player control in Music settings":
+    "Разрешите управление плеером во вкладке «Музыка»",
+  "Allow player control in System Settings → Privacy & Security → Automation":
+    "Разрешите управление плеером: Системные настройки → Конфиденциальность и безопасность → Автоматизация",
+
   Ready: "Готово",
   "Ready — USB and Bluetooth": "Готово — USB и Bluetooth",
   "Waiting for AK820 over USB or Bluetooth":
@@ -14,6 +20,18 @@ export const russian: Record<string, string> = {
   "Spotify: paused": "Spotify: пауза",
   "Apple Music: playing": "Apple Music: воспроизведение",
   "Apple Music: paused": "Apple Music: пауза",
+  "YouTube Music: next": "YouTube Music: следующий трек",
+  "YouTube Music: previous": "YouTube Music: предыдущий трек",
+  "YouTube Music: seek_forward": "YouTube Music: вперёд на 5 секунд",
+  "YouTube Music: seek_backward": "YouTube Music: назад на 5 секунд",
+  "Spotify: next": "Spotify: следующий трек",
+  "Spotify: previous": "Spotify: предыдущий трек",
+  "Spotify: seek_forward": "Spotify: вперёд на 5 секунд",
+  "Spotify: seek_backward": "Spotify: назад на 5 секунд",
+  "Apple Music: next": "Apple Music: следующий трек",
+  "Apple Music: previous": "Apple Music: предыдущий трек",
+  "Apple Music: seek_forward": "Apple Music: вперёд на 5 секунд",
+  "Apple Music: seek_backward": "Apple Music: назад на 5 секунд",
   "Enable Accessibility for AK820 Pro Modder":
     "Включите AK820 Pro Modder в Универсальном доступе",
   "Enable Accessibility for AK820 Pro Modder, then Stop controls and quit and reopen it":

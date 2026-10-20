@@ -5,6 +5,9 @@
     <!-- USB / HID access for the keyboard -->
     <key>com.apple.security.device.usb</key>
     <true/>
+    <!-- Optional, user-approved playback control for Apple Music / Spotify. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
     <!-- Required for Hardened Runtime + Notarization on macOS -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>

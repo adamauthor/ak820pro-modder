@@ -180,11 +180,42 @@ pub async fn mac_controls_status(app: AppHandle) -> Result<Value, String> {
 pub async fn mac_controls_refresh(app: AppHandle) -> Result<Value, String> {
     with_config(&app, on_main(&app, json!({"operation":"refresh"})).await?)
 }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MusicCommand {
+    Toggle,
+    Next,
+    Previous,
+    SeekForward,
+    SeekBackward,
+    Open,
+    Liked,
+}
 #[tauri::command]
-pub async fn mac_controls_action(app: AppHandle, liked: bool) -> Result<Value, String> {
+pub async fn mac_controls_action(
+    app: AppHandle,
+    liked: bool,
+    action: Option<MusicCommand>,
+) -> Result<Value, String> {
+    let action = action.unwrap_or(if liked {
+        MusicCommand::Liked
+    } else {
+        MusicCommand::Toggle
+    });
     with_config(
         &app,
-        on_main(&app, json!({"operation":if liked {"liked"} else {"press"}})).await?,
+        on_main(&app, json!({"operation":"action", "action":action})).await?,
+    )
+}
+#[tauri::command]
+pub async fn mac_controls_music_access(app: AppHandle, settings: bool) -> Result<Value, String> {
+    with_config(
+        &app,
+        on_main(
+            &app,
+            json!({"operation":if settings {"automation_settings"} else {"music_access"}}),
+        )
+        .await?,
     )
 }
 #[tauri::command]

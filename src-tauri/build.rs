@@ -47,6 +47,7 @@ mod mac_controls {
             "Discovery.swift",
             "Mapping.swift",
             "Player.swift",
+            "MusicAutomation.swift",
             "Bridge.swift",
         ] {
             let file = directory.join("native/mac-controls").join(name);

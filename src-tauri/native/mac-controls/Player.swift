@@ -50,6 +50,14 @@ func playerWindow(_ pid: pid_t) -> AXUIElement? {
 func playerRoot(_ pid: pid_t) -> AXUIElement {
     playerWindow(pid) ?? AXUIElementCreateApplication(pid)
 }
+func playerAvailability(_ pid: pid_t) -> String {
+    let root = AXUIElementCreateApplication(pid)
+    var windows: CFTypeRef?
+    let result = AXUIElementCopyAttributeValue(root, kAXWindowsAttribute as CFString, &windows)
+    if result != .success { return "Accessibility error \(result.rawValue); restart Modder after updating its permission" }
+    let count = (windows as? [AXUIElement])?.count ?? 0
+    return count == 0 ? "reopen the player window" : "player controls are not ready (\(count) window(s))"
+}
 func findPlayer(_ root: AXUIElement) -> YouTubePlayer? {
     guard let toolbar = axFind(root, where: { element in
         axRole(element) == kAXToolbarRole && ["player bar", "панель проигрывателя", "панель плеера"].contains(axName(element).lowercased())
@@ -138,7 +146,7 @@ func mediaSurface(_ root: AXUIElement, service: String) -> MediaSurface? {
 func seekSurface(_ surface: MediaSurface, by delta: Double) throws {
     guard let slider = axFind(surface.root, limit: 200, seconds: 1, where: { element in
         let name = axName(element).lowercased(), id = (axAttribute(element, kAXIdentifierAttribute) as? String ?? "").lowercased()
-        return axRole(element) == kAXSliderRole && ["progress", "seek", "playback", "elapsed", "воспроизведения", "позиция"].contains(where: { name.contains($0) || id.contains($0) })
+        return [kAXSliderRole, kAXProgressIndicatorRole].contains(axRole(element)) && ["progress", "seek", "playback", "elapsed", "position", "воспроизведения", "позиция"].contains(where: { name.contains($0) || id.contains($0) })
     }), let value = (axAttribute(slider, kAXValueAttribute) as? NSNumber)?.doubleValue,
         let maximum = (axAttribute(slider, kAXMaxValueAttribute) as? NSNumber)?.doubleValue, maximum > 0 else { throw MusicError.failed("This player's seek control is unavailable") }
     var settable = DarwinBoolean(false)
@@ -167,6 +175,7 @@ final class MusicController {
     var followPlaying = true
     private var lastRoute: String? // Worker queue only.
     private var busy = false // Main queue only, prevents duplicate starts on repeated clicks.
+    var isBusy: Bool { busy }
     private let requestLock = NSLock()
     private var requestID: UInt64 = 0
     private func beginRequest() -> UInt64 {
@@ -181,29 +190,53 @@ final class MusicController {
     func cancel() { _ = beginRequest(); busy = false; worker.async { [self] in lastRoute = nil } }
     var status: (String) -> Void = { _ in }
 
+    func requestMusicAccess() {
+        guard !busy, nativeMusicBundle(service) != nil else { return }
+        busy = true
+        let request = beginRequest(), selected = service
+        worker.async { [self] in
+            let result = musicAutomationPermission(selected, prompt: true)
+            finish(result == "allowed" ? "Player control allowed" : "Allow player control in System Settings → Privacy & Security → Automation", request: request)
+        }
+    }
     func perform(_ action: String) {
         guard !busy else { return }
-        guard AXIsProcessTrusted() else { status("Enable Accessibility for AK820 Pro Modder"); return }
+        guard AXIsProcessTrusted() || musicAutomationPermission(service) == "allowed" else { status("Enable Accessibility for AK820 Pro Modder"); return }
         busy = true
         let request = beginRequest(), preferred = service, follow = followPlaying, youtube = youtubeBundle
         worker.async { [self] in
             guard isCurrent(request) else { return }
             var route = preferred
             var surfaces: [String: MediaSurface] = [:]
+            var native: [String: NativeMusicClient] = [:]
+            var unavailable: [String: String] = [:]
+            var playing = Set<String>()
             for service in follow ? [preferred] + ["youtube_music", "spotify", "apple_music"].filter({ $0 != preferred }) : [preferred] {
                 let bundle = serviceBundle(service, youtube: youtube)
                 guard !bundle.isEmpty, let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else { continue }
-                if let surface = mediaSurface(playerRoot(app.processIdentifier), service: service) { surfaces[service] = surface }
+                if let client = NativeMusicClient(service) {
+                    native[service] = client
+                    if (try? client.isPlaying()) == true { playing.insert(service) }
+                } else if let surface = mediaSurface(playerRoot(app.processIdentifier), service: service) {
+                    surfaces[service] = surface
+                    if surface.playing { playing.insert(service) }
+                } else { unavailable[service] = playerAvailability(app.processIdentifier) }
             }
             route = chooseMusicService(preferred: preferred, follow: follow,
-                playing: Set(surfaces.filter { $0.value.playing }.map(\.key)), available: Set(surfaces.keys), last: lastRoute)
+                playing: playing, available: Set(surfaces.keys).union(native.keys), last: lastRoute)
             if action == "liked" { route = "youtube_music" }
             let bundle = serviceBundle(route, youtube: youtube)
             do {
                 guard isCurrent(request) else { return }
                 if action == "open" { openNative(bundle: bundle, play: false, route: route, request: request); return }
                 if action == "liked" { launchAndPlay(forceLiked: true, bundle: youtube, request: request); return }
-                if let surface = surfaces[route] {
+                if let client = native[route] {
+                    let wasPlaying = (try? client.isPlaying()) == true
+                    try client.perform(action)
+                    if action == "toggle" { try confirmNative(client, playing: !wasPlaying, request: request) }
+                    lastRoute = route
+                    finish("\(route == "spotify" ? "Spotify" : "Apple Music"): \(action == "toggle" ? wasPlaying ? "paused" : "playing" : action)", request: request)
+                } else if let surface = surfaces[route] {
                     switch action {
                     case "toggle":
                         try pressAX(surface.toggle)
@@ -213,8 +246,9 @@ final class MusicController {
                         }
                     case "next": guard let button = surface.next else { throw MusicError.failed("Next track is unavailable in this player") }; try pressAX(button)
                     case "previous": guard let button = surface.previous else { throw MusicError.failed("Previous track is unavailable in this player") }; try pressAX(button)
-                    case "seek_forward": try seekSurface(surface, by: 5)
-                    case "seek_backward": try seekSurface(surface, by: -5)
+                    case "seek_forward", "seek_backward":
+                        if nativeMusicBundle(route) != nil { throw MusicError.failed("Allow player control in Music settings") }
+                        try seekSurface(surface, by: action == "seek_forward" ? 5 : -5)
                     default: throw MusicError.failed("Unknown music action")
                     }
                     lastRoute = route
@@ -223,7 +257,7 @@ final class MusicController {
                     lastRoute = route
                     if route == "youtube_music" { launchAndPlay(bundle: bundle, request: request) }
                     else { openNative(bundle: bundle, play: true, route: route, request: request) }
-                } else { throw MusicError.failed("Start a track in the selected player first") }
+                } else { throw MusicError.failed(unavailable[route].map { "Player unavailable: \($0)" } ?? "Start a track in the selected player first") }
             } catch { finish("Error: \(error)", request: request) }
         }
     }
@@ -240,6 +274,11 @@ final class MusicController {
                     do {
                         for _ in 0..<20 {
                             guard isCurrent(request) else { return }
+                            if let client = NativeMusicClient(route) {
+                                if (try? client.isPlaying()) != true { try client.perform("play") }
+                                try confirmNative(client, playing: true, request: request)
+                                finish("\(route == "spotify" ? "Spotify" : "Apple Music"): playing", request: request); return
+                            }
                             if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first,
                                let player = mediaSurface(playerRoot(app.processIdentifier), service: route) {
                                 if !player.playing { try pressAX(player.toggle) }
@@ -306,6 +345,15 @@ final class MusicController {
             // not recreate a closed Safari web-app window.
             NSWorkspace.shared.openApplication(at: url, configuration: configuration, completionHandler: ready)
         }
+    }
+
+    private func confirmNative(_ client: NativeMusicClient, playing: Bool, request: UInt64) throws {
+        for _ in 0..<8 {
+            guard isCurrent(request) else { throw MusicError.failed("Playback action cancelled") }
+            if (try? client.isPlaying()) == playing { return }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        throw MusicError.failed("Choose a track in the selected music app first")
     }
 
     private func confirmPlayback(_ root: AXUIElement, request: UInt64) throws {
