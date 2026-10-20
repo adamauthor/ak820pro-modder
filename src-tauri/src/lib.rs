@@ -19,6 +19,10 @@ use tracing_subscriber::EnvFilter;
 mod audio_reactive;
 mod automations;
 mod host_keyboard;
+mod mac_controls;
+use mac_controls::{
+    mac_controls_action, mac_controls_refresh, mac_controls_save, mac_controls_status,
+};
 mod icloud_sync;
 mod now_playing;
 mod now_playing_tft;
@@ -247,6 +251,9 @@ async fn host_remaps_apply(
     remaps: Vec<host_keyboard::Remap>,
     restore: bool,
 ) -> Result<Vec<host_keyboard::Remap>, String> {
+    if !restore && mac_controls::f20_reserved(&app) && remaps.iter().any(|r| r.destination == 111) {
+        return Err("F20 is reserved for the YouTube Music knob while it is enabled".into());
+    }
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     tokio::task::spawn_blocking(move || host_keyboard::apply_remaps(&dir, remaps, restore))
         .await
@@ -670,6 +677,7 @@ async fn assign_automation_marker(
         .path()
         .app_data_dir()
         .map_err(|e| AppError::Protocol(format!("app_data_dir: {e}")))?;
+    let knob_uses_f20 = mac_controls::f20_reserved(&app);
     let chosen = {
         let dir = dir.clone();
         tokio::task::spawn_blocking(move || -> Result<u8, String> {
@@ -684,12 +692,18 @@ async fn assign_automation_marker(
             let used: std::collections::HashSet<u8> =
                 list.iter().filter_map(|a| a.marker_hid).collect();
             let chosen = match suggested {
-                Some(s) if MARKER_HID_RANGE.contains(&s) && !used.contains(&s) => s,
+                Some(s)
+                    if MARKER_HID_RANGE.contains(&s)
+                        && !used.contains(&s)
+                        && !(knob_uses_f20 && s == 111) =>
+                {
+                    s
+                }
                 _ => MARKER_HID_RANGE
                     .clone()
-                    .find(|c| !used.contains(c))
+                    .find(|c| !(used.contains(c) || knob_uses_f20 && *c == 111))
                     .ok_or_else(|| {
-                        "All 12 marker slots (F13–F24) already bound — unassign one first."
+                        "Available F13–F24 markers are all in use; unassign one first (the music knob reserves F20)."
                             .to_string()
                     })?,
             };
@@ -1309,6 +1323,7 @@ pub fn run() {
         .init();
 
     let builder = tauri::Builder::default()
+        .manage(mac_controls::State::default())
         .manage(Arc::new(ConnState::default()))
         .manage(Arc::new(TftMemory::default()))
         .manage(Arc::new(NowPlayingTftState::default()))
@@ -1325,6 +1340,10 @@ pub fn run() {
     builder
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
+            mac_controls_status,
+            mac_controls_refresh,
+            mac_controls_save,
+            mac_controls_action,
             host_keyboard_status,
             host_macro_stop,
             host_macro_run,
@@ -1394,8 +1413,8 @@ pub fn run() {
                 .version(Some(env!("CARGO_PKG_VERSION")))
                 .copyright(Some("Copyright (c) 2026 wsclx · MIT licensed"))
                 .authors(Some(vec!["wsclx".to_string()]))
-                .website(Some("https://github.com/wsclx/ak820pro-modder"))
-                .website_label(Some("github.com/wsclx/ak820pro-modder"))
+                .website(Some("https://github.com/adamauthor/ak820pro-modder"))
+                .website_label(Some("github.com/adamauthor/ak820pro-modder"))
                 .comments(Some(
                     "Open-source, macOS-first control software for the Epomaker / Ajazz AK820 Pro mechanical keyboard.",
                 ))
@@ -1479,8 +1498,32 @@ pub fn run() {
             if let Err(e) = refresh_automation_shortcuts(app.handle()) {
                 tracing::warn!("initial automation shortcut registration failed: {e}");
             }
+            if let Err(error) = mac_controls::initialize(app.handle()) {
+                tracing::warn!(%error, "Mac controls startup needs attention");
+            }
+            #[cfg(target_os = "macos")]
+            if let Some(window) = app.get_webview_window("main") {
+                let handle = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = handle.hide();
+                    }
+                });
+            }
+            if std::env::args().any(|argument| argument == "--background") {
+                if let Some(window) = app.get_webview_window("main") { let _ = window.hide(); }
+            }
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running AK820 Pro app");
+        .build(tauri::generate_context!())
+        .expect("error while building AK820 Pro app")
+        .run(|app, event| match event {
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Reopen { .. } => {
+                if let Some(window) = app.get_webview_window("main") { let _ = window.show(); let _ = window.set_focus(); }
+            }
+            tauri::RunEvent::Exit => { host_keyboard::cancel(); mac_controls::shutdown(); }
+            _ => {}
+        });
 }

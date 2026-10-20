@@ -4,9 +4,12 @@ import type { DeviceInfo, ProbeReport } from "../types";
 import { Badge, Button, Card, ErrorBanner, KVList, Mono, hex4, prettyProduct } from "../components/ui";
 import { PageHeader } from "../components/Layout";
 import { formatError } from "../errors";
+import { useMacControls } from "../mac-controls";
 
 
 export function Connect({ onReconnect }: { onReconnect?: () => void }) {
+  const mac = useMacControls();
+  const bluetooth = mac?.devices.filter(device => device.transport === "Bluetooth") ?? [];
   const [devices, setDevices] = useState<DeviceInfo[] | null>(null);
   const [probe, setProbe] = useState<ProbeReport | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -59,9 +62,13 @@ export function Connect({ onReconnect }: { onReconnect?: () => void }) {
       <ErrorBanner>{err}</ErrorBanner>
 
       <div className="grid gap-6">
+        {bluetooth.length > 0 && <Card title="Bluetooth keyboard connected">
+          <p className="text-sm">{bluetooth.map(device => device.product).join(", ")}</p>
+          <p className="mt-2 text-sm text-fg-2">Mac controls, key mappings and macros are available. Connect USB to change lighting, system settings or TFT images.</p>
+        </Card>}
         <Card title="Control interface">
           {probe === null ? (
-            <p className="text-sm text-fg-2">Waiting on a vendor interface…</p>
+            <p className="text-sm text-fg-2">{bluetooth.length ? "USB configuration interface is not connected." : "Waiting on a vendor interface…"}</p>
           ) : (
             <KVList
               rows={[
@@ -84,7 +91,7 @@ export function Connect({ onReconnect }: { onReconnect?: () => void }) {
           {devices === null ? (
             <p className="text-sm text-fg-2">Scanning…</p>
           ) : devices.length === 0 ? (
-            <p className="text-sm text-fg-2">No AK820 candidates found.</p>
+            <p className="text-sm text-fg-2">{bluetooth.length ? "Bluetooth is active. USB endpoints appear when the keyboard is connected by cable." : "No AK820 USB candidates found."}</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

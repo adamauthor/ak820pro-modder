@@ -14,6 +14,35 @@ A clean replacement for the Windows-only AJAZZ tool — native, transparent, scr
 
 </div>
 
+## Unified macOS fork — 0.7.0-macos.1
+
+This is [adamauthor's fork](https://github.com/adamauthor/ak820pro-modder) of
+[wsclx's AK820 Pro Modder](https://github.com/wsclx/ak820pro-modder), retaining the
+original MIT license and author credit.
+
+**One application:** USB FF13 image/GIF uploads and supported keyboard controls,
+Mac key mappings/macros, Bluetooth knob support, YouTube Music fallback and
+optional launch at login. All Mac controls run inside Modder; no separate
+music helper is needed.
+
+[Download the macOS release](https://github.com/adamauthor/ak820pro-modder/releases/tag/v0.7.0-macos.1)
+· [Mac controls setup and behavior](docs/MACOS-CONTROLS.md)
+· [FF13 hardware evidence and limits](docs/MACOS-800A.md)
+
+Open **Mac controls**, choose the knob action and save. If no player is active,
+the music action opens the installed Safari YouTube Music app and continues
+the last song; an empty queue starts **Liked Music**. Closing the window keeps
+controls and shortcuts running. The AK820 menu-bar item reopens it; Quit stops
+it. YouTube Music mode requires macOS 14.2+ and Accessibility for Modder.
+
+Known profiles: USB `0C45:800A` (`AK820`) and Bluetooth LE `0C45:FEFE`
+(`AK820 5.1-1`). Slots 2/3 have matching profiles but were not physically tested.
+**Lighting, clock/sleep and TFT writes still require USB.** Bluetooth support
+here is for Mac controls and key remapping, not undocumented wireless firmware
+configuration. Onboard key/Fn tables, onboard macros and per-key RGB remain
+unavailable for the FF13 revision; the older web-profile feature set below
+has different hardware coverage.
+
 ---
 
 ## Why
@@ -29,17 +58,17 @@ The official Epomaker / Ajazz driver is Windows-only and limited. macOS users ge
 | Per-key RGB | ✅ | ✅ click-to-paint surface |
 | Keymap remap | ✅ | ✅ base + Fn layer + factory-default reset |
 | Macro recorder | ✅ | ✅ live capture in the app |
-| TFT image upload | ✅ | 🚧 wire-format decoded, visibility verification in progress |
+| TFT image upload | ✅ | ✅ FF13 image/GIF verified; other profiles have separate coverage |
 | **AppleScript / Shortcuts library** | ❌ | ✅ host-side runner with 15 starter examples |
 | **Keyboard-triggered automations** | ❌ | ✅ bind AppleScripts to physical keys via F13–F24 markers |
 | **Now-Playing reader (Music + Spotify)** | ❌ | ✅ live in the System view |
 | **Cross-cutting presets** | ❌ | ✅ 10 curated profiles (Gaming / Dev / Office / Creative / Lifestyle) |
 | Audio-reactive lighting | ❌ | 🧪 alpha — pipeline works, real-music smoothness still WIP |
-| Now-playing on TFT | ❌ | 🛣 planned (gated on TFT activation RE) |
+| Now-playing on TFT | ❌ | 🧪 web-profile beta; unavailable on FF13 |
 | Profile sync across machines | ❌ | 🧪 beta (iCloud Drive · automations library, more files coming) |
 | Open source | ❌ | ✅ MIT |
 
-## Status
+## Upstream status (0.7.0-beta)
 
 **Version 0.7.0-beta.** Lighting (incl. per-key paint surface), keymap (with factory-default reset), macros, system info, and the host-side automations engine — including a curated 15-entry starter library and one-click cross-cutting presets — are all hardware-verified on the AK820 Pro running firmware 1.07 (**ISO-DE** German QWERTZ layout). 0.7 adds three new top-level capabilities: **audio-reactive lighting** (🧪 alpha, behind a two-stage opt-in), **iCloud-Drive profile sync** for the automations library (🧪 beta), and **four additional physical layouts** — ANSI, ISO-UK, ISO-ES, ISO-FR — driven by a sidebar picker (🧪 beta · unverified without hardware). TFT upload is protocol-complete and ships a CLI smoke test; the in-app TFT UI is gated on one final reverse-engineering step. See the [Roadmap](#roadmap) section for details.
 
@@ -59,15 +88,17 @@ The web-output firmware features described elsewhere keep their existing path.
 
 ## Quick start
 
-### Install (macOS, build from source for now)
+### Install (macOS)
+
+Download the Apple Silicon `.zip` from the [fork release](https://github.com/adamauthor/ak820pro-modder/releases/tag/v0.7.0-macos.1), unzip it and move **AK820 Pro Modder.app** to Applications. The release is ad-hoc signed and not notarized. Source builds also require Xcode Command Line Tools.
 
 ```bash
-# Prerequisites: Rust 1.82+, Node.js 20+, pnpm
-git clone https://github.com/wsclx/ak820pro-modder.git
+# Prerequisites: Rust toolchain from rust-toolchain.toml, Node.js 20+, pnpm
+git clone https://github.com/adamauthor/ak820pro-modder.git
 cd ak820pro-modder
-pnpm install
-pnpm tauri:build
-open src-tauri/target/release/bundle/dmg/*.dmg
+pnpm install --frozen-lockfile
+pnpm tauri:build --bundles app
+open "target/release/bundle/macos/AK820 Pro Modder.app"
 ```
 
 Drag **AK820 Pro Modder.app** into Applications and launch.

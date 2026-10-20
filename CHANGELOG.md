@@ -4,7 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
-## [Unreleased] — FF13 / USB 800A support
+## [0.7.0-macos.1] — Unified macOS fork
+
+- Integrate the Mac music-knob controller directly into the Tauri executable,
+  sharing Modder's Accessibility identity and lifecycle.
+- Add Mac controls for USB/Bluetooth Play/Pause, YouTube Music cold launch,
+  last-track resume, Liked Music fallback and optional launch at login.
+- Discover installed Safari YouTube Music apps from their HTTPS manifest origin.
+- Keep the app running when its window closes; add a menu-bar reopen/quit menu.
+- Add Bluetooth key remapping with per-connection backup and readback. Preserve
+  consumer mappings on combined services and share a transaction lock with
+  the knob controller. Restore only the owned Mute rule on disable/quit.
+- Guard F20 automation/remap conflicts, retain macro hotkey handlers, and show
+  Bluetooth connectivity without suggesting that USB configuration is active.
+- Keep keyboard firmware operations and confirmed FF13 paths unchanged.
+- Make pnpm builds reproducible in cloud-managed project folders and explicitly
+  allow the existing esbuild postinstall.
+
+### Included FF13 / USB 800A support
 
 - Detect SONiX AK820 USB 0C45:800A and separate its FF13 feature control / FF68
   4096-byte TFT profile from web-output firmware. Open macOS HID non-exclusively.

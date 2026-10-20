@@ -34,6 +34,7 @@ pub struct Config {
     pub macros: Vec<HostMacro>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 struct NativeMapping {
     #[serde(
         rename = "HIDKeyboardModifierMappingSrc",
@@ -154,13 +155,25 @@ fn validate_steps(steps: &[Step]) -> Result<(), String> {
     Ok(())
 }
 
-pub fn get_remaps() -> Result<Vec<Remap>, String> {
-    native::read_map()?
+#[derive(Clone, Copy)]
+struct RemapProfile {
+    #[cfg(target_os = "macos")]
+    matching: &'static str,
+    backup: &'static str,
+}
+fn keyboard_native(map: &[NativeMapping]) -> Vec<NativeMapping> {
+    map.iter()
+        .filter(|m| m.source >> 32 == 7)
+        .cloned()
+        .collect()
+}
+fn keyboard_remaps(map: &[NativeMapping]) -> Result<Vec<Remap>, String> {
+    keyboard_native(map)
         .into_iter()
         .map(|m| {
-            if m.source >> 32 != 7 || m.destination >> 32 != 7 {
+            if m.destination >> 32 != 7 {
                 return Err(
-                    "Existing mappings use a different usage page; leave them unchanged".into(),
+                    "A keyboard mapping targets another usage page; leaving it unchanged".into(),
                 );
             }
             Ok(Remap {
@@ -170,23 +183,33 @@ pub fn get_remaps() -> Result<Vec<Remap>, String> {
         })
         .collect()
 }
+fn merged_keyboard(current: &[NativeMapping], keyboard: &[NativeMapping]) -> Vec<NativeMapping> {
+    current
+        .iter()
+        .filter(|m| m.source >> 32 != 7)
+        .chain(keyboard)
+        .cloned()
+        .collect()
+}
+
+pub fn get_remaps() -> Result<Vec<Remap>, String> {
+    keyboard_remaps(&native::read_map(native::profile()?)?)
+}
 pub fn saved_remaps(dir: &Path) -> Result<Vec<Remap>, String> {
-    let bytes =
-        std::fs::read(dir.join("host-remap-backup.json")).map_err(|_| "No saved Mac mappings")?;
+    let profile = native::profile()?;
+    let bytes = std::fs::read(dir.join(profile.backup))
+        .map_err(|_| "No saved mappings for this connection")?;
     let backup: RemapBackup = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    Ok(backup
-        .applied
-        .into_iter()
-        .map(|m| Remap {
-            source: (m.source & 0xffff) as u16,
-            destination: (m.destination & 0xffff) as u16,
-        })
-        .collect())
+    keyboard_remaps(&backup.applied)
 }
 pub fn apply_remaps(dir: &Path, remaps: Vec<Remap>, restore: bool) -> Result<Vec<Remap>, String> {
     let _lock = REMAP_LOCK
         .lock()
         .map_err(|_| "Mac mapping lock unavailable")?;
+    // Shared with the in-process Swift knob controller. Bluetooth combines
+    // keyboard and consumer usages in one service, so read/modify/write must
+    // be serialized and preserve the other owner's rows.
+    let _native_lock = native::mapping_lock(dir)?;
     let mut sources = BTreeSet::new();
     if remaps.len() > 128
         || remaps.iter().any(|r| {
@@ -197,8 +220,11 @@ pub fn apply_remaps(dir: &Path, remaps: Vec<Remap>, restore: bool) -> Result<Vec
     {
         return Err("Use unique keyboard usages from 4 to 231".into());
     }
-    let current = native::read_map()?;
-    let path = dir.join("host-remap-backup.json");
+    let profile = native::profile()?;
+    let current = native::read_map(profile)?;
+    let _ = keyboard_remaps(&current)?;
+    let current_keyboard = keyboard_native(&current);
+    let path = dir.join(profile.backup);
     let old: Option<RemapBackup> = if path.exists() {
         Some(
             serde_json::from_slice(&std::fs::read(&path).map_err(|e| e.to_string())?)
@@ -208,14 +234,19 @@ pub fn apply_remaps(dir: &Path, remaps: Vec<Remap>, restore: bool) -> Result<Vec
         None
     };
     if let Some(old) = &old {
-        // Empty is also allowed after a device re-plug (macOS loses hidutil mappings).
-        if current != old.applied && !current.is_empty() {
-            return Err("Mappings were changed by another app. Leave them unchanged and review the conflict first".into());
+        if current_keyboard != keyboard_native(&old.applied) && !current_keyboard.is_empty() {
+            return Err(
+                "Keyboard mappings were changed by another app; leaving them unchanged".into(),
+            );
         }
     }
     if restore {
-        let old = old.ok_or("No mappings applied by this app to undo")?;
-        native::write_map(&old.baseline)?;
+        let old = old.ok_or("No mappings applied by this app to undo for this connection")?;
+        let _ = keyboard_remaps(&old.baseline)?;
+        native::write_map(
+            profile,
+            &merged_keyboard(&current, &keyboard_native(&old.baseline)),
+        )?;
         std::fs::remove_file(path).map_err(|e| e.to_string())?;
     } else {
         let applied = remaps
@@ -228,17 +259,16 @@ pub fn apply_remaps(dir: &Path, remaps: Vec<Remap>, restore: bool) -> Result<Vec
         let backup = RemapBackup {
             baseline: old
                 .as_ref()
-                .map(|b| b.baseline.clone())
-                .unwrap_or_else(|| current.clone()),
+                .map(|b| keyboard_native(&b.baseline))
+                .unwrap_or(current_keyboard),
             applied,
         };
-        // Save the undo record BEFORE touching macOS.
-        write_json(dir, "host-remap-backup.json", &backup)?;
-        if let Err(error) = native::write_map(&backup.applied) {
-            // A denied/no-op write must not leave a misleading ownership record.
-            if native::read_map().ok().as_ref() == Some(&current) {
+        write_json(dir, profile.backup, &backup)?;
+        if let Err(error) = native::write_map(profile, &merged_keyboard(&current, &backup.applied))
+        {
+            if native::read_map(profile).ok().as_ref() == Some(&current) {
                 if let Some(old) = old {
-                    let _ = write_json(dir, "host-remap-backup.json", &old);
+                    let _ = write_json(dir, profile.backup, &old);
                 } else {
                     let _ = std::fs::remove_file(path);
                 }
@@ -246,7 +276,7 @@ pub fn apply_remaps(dir: &Path, remaps: Vec<Remap>, restore: bool) -> Result<Vec
             return Err(error);
         }
     }
-    get_remaps()
+    keyboard_remaps(&native::read_map(profile)?)
 }
 
 pub fn play(m: HostMacro, countdown: bool) -> Result<(), String> {
@@ -416,14 +446,85 @@ fn virtual_key(code: &str) -> Option<u16> {
 
 #[cfg(target_os = "macos")]
 mod native {
-    use super::NativeMapping;
+    use super::{NativeMapping, RemapProfile};
     use std::{
         ffi::c_void,
         io::Write,
         process::{Command, Stdio},
     };
-    const MATCH: &str =
-        r#"{"VendorID":3141,"ProductID":32778,"PrimaryUsagePage":1,"PrimaryUsage":6}"#;
+    const PROFILES: [RemapProfile; 4] = [
+        RemapProfile {
+            matching: r#"{"VendorID":3141,"ProductID":32778,"Product":"AK820","Transport":"USB","PrimaryUsagePage":1,"PrimaryUsage":6}"#,
+            backup: "host-remap-backup.json",
+        },
+        RemapProfile {
+            matching: r#"{"VendorID":3141,"ProductID":65278,"Product":"AK820 5.1-1","Transport":"Bluetooth Low Energy","PrimaryUsagePage":1,"PrimaryUsage":6}"#,
+            backup: "host-remap-backup-bluetooth-1.json",
+        },
+        RemapProfile {
+            matching: r#"{"VendorID":3141,"ProductID":65278,"Product":"AK820 5.1-2","Transport":"Bluetooth Low Energy","PrimaryUsagePage":1,"PrimaryUsage":6}"#,
+            backup: "host-remap-backup-bluetooth-2.json",
+        },
+        RemapProfile {
+            matching: r#"{"VendorID":3141,"ProductID":65278,"Product":"AK820 5.1-3","Transport":"Bluetooth Low Energy","PrimaryUsagePage":1,"PrimaryUsage":6}"#,
+            backup: "host-remap-backup-bluetooth-3.json",
+        },
+    ];
+    pub fn profile() -> Result<RemapProfile, String> {
+        let result = Command::new("/usr/bin/hidutil")
+            .args(["list", "--ndjson", "--matching", r#"{"VendorID":3141}"#])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if !result.status.success() {
+            return Err("Could not enumerate AJAZZ keyboard services".into());
+        }
+        let mut found = Vec::new();
+        for line in String::from_utf8_lossy(&result.stdout).lines() {
+            let row: serde_json::Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
+            if row["type"] != "service" {
+                continue;
+            }
+            for profile in PROFILES {
+                let matching: serde_json::Map<String, serde_json::Value> =
+                    serde_json::from_str(profile.matching).map_err(|e| e.to_string())?;
+                if matching
+                    .iter()
+                    .all(|(key, value)| row.get(key) == Some(value))
+                {
+                    found.push(profile);
+                }
+            }
+        }
+        match found.as_slice() {
+            [profile] => Ok(*profile),
+            [] => Err("Connect the AK820 by USB or Bluetooth first".into()),
+            _ => Err(
+                "Multiple AK820 keyboard connections; use one connection for key remapping".into(),
+            ),
+        }
+    }
+    pub struct MappingLock {
+        _file: std::fs::File,
+    }
+    pub fn mapping_lock(dir: &std::path::Path) -> Result<MappingLock, String> {
+        use std::os::{fd::AsRawFd, unix::fs::OpenOptionsExt};
+        extern "C" {
+            fn flock(fd: i32, operation: i32) -> i32;
+        }
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .mode(0o600)
+            .open(dir.join("native-map.lock"))
+            .map_err(|e| e.to_string())?;
+        if unsafe { flock(file.as_raw_fd(), 2) } != 0 {
+            return Err("Cannot lock native Mac mappings".into());
+        }
+        Ok(MappingLock { _file: file })
+    }
     #[link(name = "ApplicationServices", kind = "framework")]
     extern "C" {
         fn AXIsProcessTrusted() -> bool;
@@ -452,9 +553,15 @@ mod native {
         }
         Ok(())
     }
-    pub fn read_map() -> Result<Vec<NativeMapping>, String> {
+    pub fn read_map(profile: RemapProfile) -> Result<Vec<NativeMapping>, String> {
         let out = Command::new("/usr/bin/hidutil")
-            .args(["property", "--matching", MATCH, "--get", "UserKeyMapping"])
+            .args([
+                "property",
+                "--matching",
+                profile.matching,
+                "--get",
+                "UserKeyMapping",
+            ])
             .output()
             .map_err(|e| e.to_string())?;
         if !out.status.success() {
@@ -468,7 +575,7 @@ mod native {
             .filter(|line| line.contains("UserKeyMapping"));
         let first = lines
             .next()
-            .ok_or("AJAZZ USB keyboard not found. Connect it by USB first")?;
+            .ok_or("AJAZZ interface disappeared; reconnect the keyboard first")?;
         if lines.next().is_some() {
             return Err("Multiple matching keyboard services; refusing an ambiguous remap".into());
         }
@@ -498,13 +605,13 @@ mod native {
         }
         serde_json::from_slice(&out.stdout).map_err(|e| format!("Invalid macOS mapping: {e}"))
     }
-    pub fn write_map(map: &[NativeMapping]) -> Result<(), String> {
+    pub fn write_map(profile: RemapProfile, map: &[NativeMapping]) -> Result<(), String> {
         let json = serde_json::json!({"UserKeyMapping":map}).to_string();
         let out = Command::new("/usr/bin/hidutil")
-            .args(["property", "--matching", MATCH, "--set", &json])
+            .args(["property", "--matching", profile.matching, "--set", &json])
             .output()
             .map_err(|e| e.to_string())?;
-        if !out.status.success() || read_map()? != map {
+        if !out.status.success() || read_map(profile)? != map {
             return Err(format!(
                 "macOS did not apply the mapping: {} {}",
                 String::from_utf8_lossy(&out.stdout),
@@ -516,17 +623,23 @@ mod native {
 }
 #[cfg(not(target_os = "macos"))]
 mod native {
-    use super::NativeMapping;
+    use super::{NativeMapping, RemapProfile};
     pub fn trusted() -> bool {
         false
     }
     pub fn post(_: u16, _: bool, _: u64) -> Result<(), String> {
         Err("Mac macros require macOS".into())
     }
-    pub fn read_map() -> Result<Vec<NativeMapping>, String> {
+    pub fn profile() -> Result<RemapProfile, String> {
         Err("Mac remapping requires macOS".into())
     }
-    pub fn write_map(_: &[NativeMapping]) -> Result<(), String> {
+    pub fn mapping_lock(_: &std::path::Path) -> Result<(), String> {
+        Err("Mac remapping requires macOS".into())
+    }
+    pub fn read_map(_: RemapProfile) -> Result<Vec<NativeMapping>, String> {
+        Err("Mac remapping requires macOS".into())
+    }
+    pub fn write_map(_: RemapProfile, _: &[NativeMapping]) -> Result<(), String> {
         Err("Mac remapping requires macOS".into())
     }
 }
@@ -534,6 +647,41 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bluetooth_keyboard_apply_and_undo_preserve_the_music_knob() {
+        let knob = NativeMapping {
+            source: (12 << 32) | 0xe2,
+            destination: PAGE | 111,
+        };
+        let keyboard = NativeMapping {
+            source: PAGE | 4,
+            destination: PAGE | 5,
+        };
+        let combined =
+            merged_keyboard(std::slice::from_ref(&knob), std::slice::from_ref(&keyboard));
+        assert_eq!(
+            keyboard_remaps(&combined).unwrap(),
+            vec![Remap {
+                source: 4,
+                destination: 5
+            }]
+        );
+        assert_eq!(merged_keyboard(&combined, &[]), vec![knob]);
+    }
+    #[test]
+    fn unknown_mapping_fields_and_non_keyboard_targets_are_rejected() {
+        assert!(serde_json::from_value::<NativeMapping>(serde_json::json!({
+            "HIDKeyboardModifierMappingSrc": PAGE | 4,
+            "HIDKeyboardModifierMappingDst": PAGE | 5,
+            "UnknownFutureField": true
+        }))
+        .is_err());
+        assert!(keyboard_remaps(&[NativeMapping {
+            source: PAGE | 4,
+            destination: (12 << 32) | 0xcd
+        }])
+        .is_err());
+    }
     fn step(code: &str, down: bool) -> Step {
         Step {
             code: code.into(),

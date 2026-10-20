@@ -158,3 +158,10 @@ not the web firmware's 512-byte mapping. The GUI's logical indices and native
 packing are not established sufficiently to reconstruct or back up every
 binding. That evidence is deliberately not treated as permission to upload
 an experimental whole-keyboard table.
+
+## Unified Mac controls in this fork
+
+The music knob, Bluetooth key mappings, optional login launch and background
+window behavior are integrated in the same Modder process. See
+[MACOS-CONTROLS.md](MACOS-CONTROLS.md) for setup, ownership and connection scope.
+This does not enable unknown onboard key/Fn tables or wireless TFT writes.

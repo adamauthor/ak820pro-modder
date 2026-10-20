@@ -1,4 +1,5 @@
 fn main() {
+    mac_controls::build();
     // Tauri's own build hooks.
     tauri_build::build();
 
@@ -10,6 +11,89 @@ fn main() {
     // seldom enough that 30-line duplication beats a shared crate
     // for build-script-only logic.
     swift_rpath::emit();
+}
+
+mod mac_controls {
+    pub fn build() {
+        if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
+            return;
+        }
+        let directory = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+        let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+        let architecture = match std::env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+            "aarch64" => "arm64",
+            "x86_64" => "x86_64",
+            other => panic!("Unsupported Mac controls architecture: {other}"),
+        };
+        let mut command = std::process::Command::new("xcrun");
+        command.args([
+            "swiftc",
+            "-parse-as-library",
+            "-O",
+            "-emit-library",
+            "-static",
+            "-module-name",
+            "AK820MacControls",
+            "-target",
+            &format!("{architecture}-apple-macosx11.0"),
+        ]);
+        for name in [
+            "AudioState.swift",
+            "Discovery.swift",
+            "Mapping.swift",
+            "Player.swift",
+            "Bridge.swift",
+        ] {
+            let file = directory.join("native/mac-controls").join(name);
+            println!("cargo:rerun-if-changed={}", file.display());
+            command.arg(file);
+        }
+        let result = command
+            .arg("-o")
+            .arg(output.join("libAK820MacControls.a"))
+            .output()
+            .expect("Xcode Command Line Tools with Swift are required on macOS");
+        assert!(
+            result.status.success(),
+            "Mac controls Swift build failed:\n{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        println!("cargo:rustc-link-search=native={}", output.display());
+        println!("cargo:rustc-link-lib=static=AK820MacControls");
+        for framework in [
+            "AppKit",
+            "ApplicationServices",
+            "Carbon",
+            "CoreAudio",
+            "Foundation",
+        ] {
+            println!("cargo:rustc-link-lib=framework={framework}");
+        }
+        let sdk = std::process::Command::new("xcrun")
+            .arg("--show-sdk-path")
+            .output()
+            .unwrap();
+        let sdk = String::from_utf8(sdk.stdout).unwrap();
+        println!(
+            "cargo:rustc-link-search=native={}/usr/lib/swift",
+            sdk.trim()
+        );
+        let compiler = std::process::Command::new("xcrun")
+            .args(["--find", "swiftc"])
+            .output()
+            .unwrap();
+        let compiler = String::from_utf8(compiler.stdout).unwrap();
+        if let Some(toolchain) = std::path::Path::new(compiler.trim())
+            .parent()
+            .and_then(|p| p.parent())
+        {
+            println!(
+                "cargo:rustc-link-search=native={}/lib/swift/macosx",
+                toolchain.display()
+            );
+        }
+        println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
+    }
 }
 
 mod swift_rpath {

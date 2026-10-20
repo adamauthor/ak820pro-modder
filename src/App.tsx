@@ -11,6 +11,9 @@ import { Tft } from "./views/Tft";
 import { CapabilityContext, DeviceCapabilities, UnavailableFeature } from "./capabilities";
 import { HostKeymap, HostMacros } from "./views/HostKeyboard";
 import { LegacySystem } from "./views/LegacySystem";
+import { MacControls, UsbRequired } from "./views/MacControls";
+import { MacControlsContext, MacStatus } from "./mac-controls";
+import { Music } from "lucide-react";
 import { ICLOUD_SYNC_ENABLED_KEY } from "./components/SyncCard";
 import {
   Layout,
@@ -29,6 +32,7 @@ type Tab =
   | "connect"
   | "lighting"
   | "system"
+  | "maccontrols"
   | "keymap"
   | "macros"
   | "automations"
@@ -41,7 +45,8 @@ const NAV: NavItem<Tab>[] = [
   { id: "connect", label: "Connectivity", icon: <Plug {...ICON_PROPS} /> },
   { id: "lighting", label: "Lighting", icon: <Bulb {...ICON_PROPS} /> },
   { id: "system", label: "System", icon: <Settings {...ICON_PROPS} /> },
-  { id: "keymap", label: "Keymap & Knob", icon: <Keyboard {...ICON_PROPS} /> },
+  { id: "maccontrols", label: "Mac controls", icon: <Music {...ICON_PROPS} /> },
+  { id: "keymap", label: "Keymap", icon: <Keyboard {...ICON_PROPS} /> },
   { id: "macros", label: "Macros", icon: <Macro {...ICON_PROPS} /> },
   { id: "automations", label: "Automations", icon: <Automation {...ICON_PROPS} /> },
   { id: "presets", label: "Presets", icon: <Preset {...ICON_PROPS} /> },
@@ -58,6 +63,15 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("connect");
   const [capabilities, setCapabilities] = useState<DeviceCapabilities | null>(null);
   const [probe, setProbe] = useState<ProbeReport | null>(null);
+  const [mac, setMac] = useState<MacStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => { void invoke<MacStatus>("mac_controls_status").then(value => { if (alive) setMac(value); }).catch(() => {}); };
+    refresh();
+    const timer = window.setInterval(refresh, 4000);
+    window.addEventListener("mac-controls-updated", refresh);
+    return () => { alive = false; window.clearInterval(timer); window.removeEventListener("mac-controls-updated", refresh); };
+  }, []);
 
   // iCloud auto-pull on app start. Fire-and-forget — if the iCloud
   // copy of automations.json is newer than the local one, the backend
@@ -105,25 +119,32 @@ export default function App() {
 
   const reconnect = async () => {
     try { await invoke("force_reconnect"); } catch { /* ignored */ }
+    try { setMac(await invoke<MacStatus>("mac_controls_refresh")); } catch { /* native status explains errors */ }
   };
+  const wirelessOnly = !probe?.connected && mac?.devices.some(device => device.transport === "Bluetooth");
+  const hostKeyboard = mac?.supported && (!probe?.connected || capabilities?.protocol === "legacy_feature");
+  const connection = probe?.connected ? { connected: true, product: probe.product }
+    : mac?.devices.length ? { connected: true, product: `${mac.devices[0].product} · ${mac.devices[0].transport}` }
+    : probe ? { connected: false, product: probe.product } : undefined;
 
   return (
-    <CapabilityContext.Provider value={capabilities}><Layout
+    <MacControlsContext.Provider value={mac}><CapabilityContext.Provider value={capabilities}><Layout
       nav={NAV}
       active={tab}
       onSelect={setTab}
-      connection={probe ? { connected: probe.connected, product: probe.product } : undefined}
+      connection={connection}
       onReconnect={reconnect}
       wide={tab === "keymap"}
     >
       {tab === "connect" && <Connect onReconnect={reconnect} />}
-      {tab === "lighting" && <Lighting />}
-      {tab === "system" && (capabilities?.protocol === "legacy_feature" ? <LegacySystem /> : <System />)}
-      {tab === "keymap" && (capabilities && !capabilities.keymap ? capabilities.host_keyboard ? <HostKeymap /> : <UnavailableFeature name="Onboard key remapping" /> : <Keymap />)}
-      {tab === "macros" && (capabilities && !capabilities.macros ? capabilities.host_keyboard ? <HostMacros /> : <UnavailableFeature name="Onboard macros" /> : <Macros />)}
+      {tab === "lighting" && (wirelessOnly ? <UsbRequired /> : <Lighting />)}
+      {tab === "system" && (wirelessOnly ? <UsbRequired /> : capabilities?.protocol === "legacy_feature" ? <LegacySystem /> : <System />)}
+      {tab === "maccontrols" && <MacControls />}
+      {tab === "keymap" && (hostKeyboard ? <HostKeymap /> : capabilities && !capabilities.keymap ? <UnavailableFeature name="Onboard key remapping" /> : <Keymap />)}
+      {tab === "macros" && (hostKeyboard ? <HostMacros /> : capabilities && !capabilities.macros ? <UnavailableFeature name="Onboard macros" /> : <Macros />)}
       {tab === "automations" && <Automations />}
-      {tab === "presets" && <Presets />}
-      {tab === "tft" && <Tft />}
-    </Layout></CapabilityContext.Provider>
+      {tab === "presets" && (wirelessOnly ? <UsbRequired /> : <Presets />)}
+      {tab === "tft" && (wirelessOnly ? <UsbRequired /> : <Tft />)}
+    </Layout></CapabilityContext.Provider></MacControlsContext.Provider>
   );
 }

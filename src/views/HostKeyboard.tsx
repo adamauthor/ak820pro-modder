@@ -34,11 +34,11 @@ export function HostKeymap() {
     finally { setBusy(false); }
   }
   return <div className="space-y-5">
-    <PageHeader title="Key remapping on this Mac" description="For the USB AK820 Pro (0C45:800A). Changes affect this keyboard on this Mac." />
-    <p className="text-sm text-fg-2">macOS forgets these mappings after unplugging or restarting. Reapply here when needed. Fn combinations and the knob are handled inside the keyboard and cannot be remapped through this Mac fallback. Key names are physical HID positions; typed characters follow your Mac input language.</p>
+    <PageHeader title="Key remapping on this Mac" description="For the connected USB or Bluetooth AK820. Changes affect this keyboard on this Mac." />
+    <p className="text-sm text-fg-2">macOS forgets key mappings after disconnecting or restarting. Load the saved draft and reapply when needed; USB and Bluetooth keep separate drafts. Configure the knob in Mac controls. Fn combinations remain controlled by the keyboard. Key names are physical positions; typed characters follow your Mac input language.</p>
     {error && <ErrorBanner>{error}</ErrorBanner>}
     {notice && <p role="status" className="text-sm text-good">{notice}</p>}
-    <Card title="USB key mappings">
+    <Card title="Key mappings for this connection">
       <div className="space-y-3">
         {remaps.map((r, i) => <div key={i} className="flex flex-wrap items-center gap-3">
           {(["source", "destination"] as const).map((field, j) => <label key={field} className="text-sm">{j === 0 ? "From " : "To "}<select aria-label={`${field} ${i + 1}`} className={INPUT} value={r[field]} disabled={busy} onChange={e => setRemaps(remaps.map((v, n) => n === i ? { ...v, [field]: Number(e.target.value) } : v))}>
