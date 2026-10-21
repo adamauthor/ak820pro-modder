@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 pub const CONFIG_FILE: &str = "smart-lighting.json";
 pub const BASE_FILE: &str = "lighting-state.json";
 pub const TEAMS_COLOR: &str = "7A00FF";
+const SETTLE: Duration = Duration::from_millis(2500);
 /// The 0.9.0 default, replaced on load when the user never changed it.
 const OLD_TEAMS_COLOR: &str = "6264A7";
 
@@ -165,6 +166,10 @@ pub struct SmartLighting {
     conn: Arc<ConnState>,
     dir: PathBuf,
     inner: Mutex<Inner>,
+    /// Flashes and TFT uploads must not overlap: the FF13 firmware drops
+    /// image chunks while lighting reports arrive.
+    exclusive: Arc<Mutex<()>>,
+    last_write: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 pub fn usb_connected() -> bool {
@@ -188,6 +193,8 @@ impl SmartLighting {
         Arc::new(Self {
             conn,
             dir,
+            exclusive: Arc::new(Mutex::new(())),
+            last_write: std::sync::Mutex::new(None),
             inner: Mutex::new(Inner {
                 config,
                 layers: Layers {
@@ -263,9 +270,27 @@ impl SmartLighting {
         self.inner.lock().await.layers.ringing = ringing;
         self.sync().await;
     }
-    /// Pauses writes while a TFT upload owns the keyboard.
-    pub async fn hold(&self, on: bool) {
-        self.inner.lock().await.flashing = on;
+    /// Waits for a running flash, then pauses lighting writes until
+    /// `end_upload`, so a TFT upload has the keyboard to itself.
+    pub async fn begin_upload(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        let guard = self.exclusive.clone().lock_owned().await;
+        self.inner.lock().await.flashing = true;
+        // The firmware ignores image chunks for a moment after a lighting
+        // change; uploads started right after a flash were rejected.
+        let recent = self
+            .last_write
+            .lock()
+            .ok()
+            .and_then(|t| *t)
+            .map(|t| t.elapsed());
+        if let Some(elapsed) = recent.filter(|e| *e < SETTLE) {
+            tokio::time::sleep(SETTLE - elapsed).await;
+        }
+        guard
+    }
+    pub async fn end_upload(&self, guard: tokio::sync::OwnedMutexGuard<()>) {
+        self.inner.lock().await.flashing = false;
+        drop(guard);
     }
     pub async fn teams_active(&self) -> bool {
         let inner = self.inner.lock().await;
@@ -300,6 +325,10 @@ impl SmartLighting {
     /// Blinks a colour, then returns to the winning layer. Ignored while
     /// another flash runs so a burst of messages does not queue up.
     pub async fn flash(self: &Arc<Self>, color: &str, times: u8) {
+        // Skipped while an upload runs; a flash is not worth a broken image.
+        let Ok(_exclusive) = self.exclusive.clone().try_lock_owned() else {
+            return;
+        };
         {
             let mut inner = self.inner.lock().await;
             if inner.flashing || !usb_connected() {
@@ -380,6 +409,9 @@ impl SmartLighting {
             .await;
         if let Err(error) = &result {
             tracing::debug!(?error, "smart lighting write failed; will retry");
+        }
+        if let Ok(mut last) = self.last_write.lock() {
+            *last = Some(std::time::Instant::now());
         }
         result
     }

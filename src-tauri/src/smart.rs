@@ -132,6 +132,10 @@ impl Smart {
                 self.lighting.telegram_message().await
             }
             "log" => tracing::warn!(message = %text("message"), "native"),
+            "gesture" => {
+                tracing::info!(gesture = %text("gesture"), action = %text("action"), "knob")
+            }
+            "debug" => tracing::info!(detail = %event["detail"], "native debug"),
             "knob_action" if text("action") == "pomodoro" => self.pomodoro_toggle().await,
             "bluetooth_battery" => {
                 if let Some(level) = event["level"].as_u64() {
@@ -141,7 +145,9 @@ impl Smart {
             }
             "devices" | "profile" => self.push_menu().await,
             "menu" => {
+                tracing::info!(command = %text("command"), value = %text("value"), "command");
                 if let Err(error) = self.menu(&text("command"), &text("value")).await {
+                    tracing::warn!(%error, "command failed");
                     self.notify("AK820", &error).await;
                 }
                 self.push_menu().await;
@@ -181,6 +187,24 @@ impl Smart {
                 self.save_smart(config).await?;
             }
             "pomodoro" => self.pomodoro_command(value).await?,
+            "test" => match value {
+                "telegram" => self.lighting.telegram_message().await,
+                "teams_ring" | "teams" => {
+                    let ring = value == "teams_ring";
+                    if ring {
+                        self.lighting.set_ringing(true).await
+                    } else {
+                        self.lighting.set_teams(true).await
+                    }
+                    tokio::time::sleep(Duration::from_secs(6)).await;
+                    if ring {
+                        self.lighting.set_ringing(false).await
+                    } else {
+                        self.lighting.set_teams(false).await
+                    }
+                }
+                _ => return Err("Unknown test".into()),
+            },
             "anime" => self.anime_upload(value).await?,
             _ => {}
         }
@@ -308,7 +332,7 @@ impl Smart {
         tauri::async_runtime::spawn(async move {
             lighting.flash(&color, 3).await;
             if let Some(scene) = card.flatten() {
-                lighting.hold(true).await;
+                let exclusive = lighting.begin_upload().await;
                 let result = tauri::async_runtime::spawn_blocking(move || {
                     anime_screen::upload(&scene, &anime)
                 })
@@ -319,7 +343,7 @@ impl Smart {
                     Ok(()) => tracing::info!("Pomodoro anime card uploaded"),
                     Err(error) => tracing::warn!(%error, "Pomodoro anime card"),
                 }
-                lighting.hold(false).await;
+                lighting.end_upload(exclusive).await;
                 lighting.restore().await;
             }
         });
@@ -473,7 +497,7 @@ impl Smart {
         let config = self.anime_config().await;
         let youtube = self.youtube_playing(scene).await;
         let name = scene.to_string();
-        self.lighting.hold(true).await;
+        let exclusive = self.lighting.begin_upload().await;
         let result = tauri::async_runtime::spawn_blocking(move || {
             let built = anime_screen::build_scene(&name, &config, youtube)?;
             anime_screen::upload(&built, &config)
@@ -481,7 +505,7 @@ impl Smart {
         .await
         .map_err(|e| e.to_string())
         .and_then(|r| r);
-        self.lighting.hold(false).await;
+        self.lighting.end_upload(exclusive).await;
         // The FF13 image transfer can change the LEDs; redraw the winning layer.
         self.lighting.restore().await;
         match &result {

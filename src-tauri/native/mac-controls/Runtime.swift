@@ -22,6 +22,15 @@ final class NativeFileLock {
 }
 
 let showSettingsNotification = Notification.Name("io.github.wsclx.ak820pro-modder.show-settings")
+let commandNotification = Notification.Name("io.github.wsclx.ak820pro-modder.command")
+
+/// `--command group:value` (e.g. `pomodoro:start`, `anime:now_playing`,
+/// `lighting:off`, `test:telegram`) for Shortcuts and scripts.
+func launchCommand(_ arguments: [String] = CommandLine.arguments) -> String? {
+    guard let index = arguments.firstIndex(of: "--command"), index + 1 < arguments.count else { return nil }
+    let command = arguments[index + 1]
+    return command.count <= 64 && command.contains(":") ? command : nil
+}
 private var applicationLease: NativeFileLock?
 
 // Called before creating a webview or registering hotkeys. Different copies of
@@ -34,7 +43,9 @@ public func ak820MacClaimInstance(_ showWindow: Int32) -> Int32 {
         applicationLease = try NativeFileLock(directory.appendingPathComponent("application-instance.lock"))
         return 1
     } catch NativeLockError.busy {
-        if showWindow != 0 {
+        if let command = launchCommand() {
+            DistributedNotificationCenter.default().postNotificationName(commandNotification, object: command, userInfo: nil, deliverImmediately: true)
+        } else if showWindow != 0 {
             DistributedNotificationCenter.default().postNotificationName(showSettingsNotification, object: nil, userInfo: nil, deliverImmediately: true)
         }
         return 0

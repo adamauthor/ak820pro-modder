@@ -208,7 +208,11 @@ func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID: pid_
         Thread.sleep(forTimeInterval: 0.07)
         if abs(position() - before) < tolerance / 2 { break }
     }
-    guard confirmed() else { throw MusicError.failed("The player did not confirm seeking") }
+    guard confirmed() else {
+        emit(["event": "debug", "detail": ["seek": "unconfirmed", "role": axRole(slider), "name": axName(slider), "start": value, "now": position(),
+              "target": target, "max": maximum, "description": axAttribute(slider, kAXValueDescriptionAttribute) as? String ?? ""]])
+        throw MusicError.failed("The player did not confirm seeking")
+    }
 }
 func displayName(_ route: String) -> String {
     route == "youtube_music" ? "YouTube Music" : route == "spotify" ? "Spotify" : "Apple Music"
@@ -511,6 +515,13 @@ func youtubeNowPlaying() -> [String: Any]? {
     if info["title"] == nil, let title = axAttribute(window, kAXTitleAttribute) as? String {
         let cleaned = title.replacingOccurrences(of: " - YouTube Music", with: "")
         if cleaned != title && !cleaned.isEmpty { info["title"] = cleaned }
+    }
+    // The page URL carries the video id; its thumbnail is the track artwork.
+    if cover == nil, let web = axFind(window, limit: 120, seconds: 1, where: { axRole($0) == "AXWebArea" }),
+       let page = axAttribute(web, "AXURL") as? URL,
+       let id = URLComponents(url: page, resolvingAgainstBaseURL: false)?.queryItems?.first(where: { $0.name == "v" })?.value,
+       id.range(of: #"^[A-Za-z0-9_-]{6,20}$"#, options: .regularExpression) != nil {
+        cover = "https://i.ytimg.com/vi/\(id)/hqdefault.jpg"
     }
     if let cover {
         info["cover_url"] = cover.replacingOccurrences(of: #"=w\d+-h\d+"#, with: "=w544-h544", options: .regularExpression)

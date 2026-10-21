@@ -300,6 +300,11 @@ pub fn upload(scene: &Scene, config: &AnimeConfig) -> Result<(), String> {
                 attempt += 1;
                 std::thread::sleep(std::time::Duration::from_millis(750));
             }
+            // Nothing was saved when the first chunk is refused; try once more.
+            Err(error) if error.contains("No acknowledgement for TFT chunk 1/") && attempt < 1 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_secs(3));
+            }
             other => return other,
         }
     }

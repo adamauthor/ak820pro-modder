@@ -31,6 +31,7 @@ final class NativeControls: NSObject, NSMenuDelegate {
     var backgroundActivity: NSObjectProtocol?
     var applicationObserver: NSObjectProtocol?
     var instanceObserver: NSObjectProtocol?
+    var commandObserver: NSObjectProtocol?
     // hidutil runs on this queue so AppKit never waits on child processes.
     let mappingQueue = DispatchQueue(label: "local.ak820pro.mappings")
     var mappingGeneration = 0
@@ -77,6 +78,12 @@ final class NativeControls: NSObject, NSMenuDelegate {
                 let bundle = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
                 emit(["event": "frontmost", "bundle": bundle as Any? ?? NSNull()])
                 self?.refreshQuietly()
+            }
+        }
+        if commandObserver == nil {
+            commandObserver = DistributedNotificationCenter.default().addObserver(forName: commandNotification, object: nil, queue: .main) { note in
+                guard let command = note.object as? String, let colon = command.firstIndex(of: ":") else { return }
+                emit(["event": "menu", "command": String(command[..<colon]), "value": String(command[command.index(after: colon)...])])
             }
         }
         if instanceObserver == nil {
@@ -234,6 +241,7 @@ final class NativeControls: NSObject, NSMenuDelegate {
         } catch { lastError = String(describing: error) }
     }
     func record(gesture: String, action: String) {
+        emit(["event": "gesture", "gesture": gesture, "action": action])
         eventID += 1
         events.insert(GestureEvent(id: eventID, gesture: gesture, action: action, profile: activeProfile?.name ?? "Default", preview: preview), at: 0)
         events = Array(events.prefix(8))

@@ -14,6 +14,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - Pomodoro anime cards wait for the phase-change flash and retry while the
   keyboard is briefly busy; lighting writes pause during every TFT upload.
 - “Open settings” asks macOS for Accessibility directly.
+- Flashes and TFT uploads never overlap, and uploads wait 2.5 s after a
+  lighting change (the firmware refused image chunks right after a flash).
+- YouTube Music now-playing cards get the track artwork from the video id.
+- `--command group:value` drives the running app from scripts and Shortcuts,
+  e.g. `pomodoro:start`, `anime:now_playing`, `lighting:off`, `test:telegram`
+  (`"…/AK820 Pro Modder.app/Contents/MacOS/ak820pro-app" --command …`).
+- Knob gestures and seek diagnostics are written to the log.
 
 ## [0.9.1-macos.1] — Fixes after hardware testing
 
