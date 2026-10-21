@@ -16,6 +16,9 @@ use tokio::sync::Mutex;
 
 pub const CONFIG_FILE: &str = "smart-lighting.json";
 pub const BASE_FILE: &str = "lighting-state.json";
+pub const TEAMS_COLOR: &str = "7A00FF";
+/// The 0.9.0 default, replaced on load when the user never changed it.
+const OLD_TEAMS_COLOR: &str = "6264A7";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppLighting {
@@ -40,8 +43,9 @@ impl Default for SmartConfig {
     fn default() -> Self {
         Self {
             teams_enabled: true,
-            // Teams purple, breathing, so a call is visible but not harsh.
-            teams_lighting: effect(Mode::Breath, "6264A7", 5, 2),
+            // A saturated violet: Teams' own #6264A7 is so pale that the
+            // LEDs render it as bluish white.
+            teams_lighting: effect(Mode::Breath, TEAMS_COLOR, 5, 2),
             telegram_enabled: true,
             telegram_color: "0088FF".into(),
             telegram_flashes: 3,
@@ -163,7 +167,15 @@ pub fn usb_connected() -> bool {
 
 impl SmartLighting {
     pub fn new(conn: Arc<ConnState>, dir: PathBuf) -> Arc<Self> {
-        let config: SmartConfig = json_store::load(&dir, CONFIG_FILE);
+        let mut config: SmartConfig = json_store::load(&dir, CONFIG_FILE);
+        if config
+            .teams_lighting
+            .color
+            .eq_ignore_ascii_case(OLD_TEAMS_COLOR)
+        {
+            config.teams_lighting.color = TEAMS_COLOR.into();
+            let _ = json_store::save(&dir, CONFIG_FILE, &config);
+        }
         let base: Option<LightingConfig> = json_store::load(&dir, BASE_FILE);
         Arc::new(Self {
             conn,
@@ -382,7 +394,7 @@ mod tests {
             pomodoro: Some(solid("FF0000", 5)),
             teams: true,
         };
-        assert_eq!(desired(&layers, &config).unwrap().color, "6264A7");
+        assert_eq!(desired(&layers, &config).unwrap().color, TEAMS_COLOR);
         layers.teams = false;
         assert_eq!(desired(&layers, &config).unwrap().color, "FF0000");
         layers.pomodoro = None;

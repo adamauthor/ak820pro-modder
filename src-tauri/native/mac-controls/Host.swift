@@ -116,6 +116,7 @@ let telegramNames: Set<String> = ["Telegram", "Telegram Desktop", "Telegram Lite
 /// Unread count from Telegram's Dock badge, read through Accessibility.
 /// nil when Telegram is not in the Dock or Accessibility is missing.
 func telegramBadge() -> Int? {
+    if let badge = launchServicesBadge() { return badge }
     guard AXIsProcessTrusted(), let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first else { return nil }
     let root = AXUIElementCreateApplication(dock.processIdentifier)
     AXUIElementSetMessagingTimeout(root, 0.5)
@@ -124,6 +125,28 @@ func telegramBadge() -> Int? {
         return badgeCount(axAttribute(item, "AXStatusLabel") as? String)
     }
     return nil
+}
+/// The Dock badge as Launch Services reports it; needs no Accessibility.
+func launchServicesBadge() -> Int? {
+    for bundle in ["ru.keepcoder.Telegram", "org.telegram.desktop", "com.tdesktop.Telegram"] {
+        guard NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first != nil else { continue }
+        let process = Process(), pipe = Pipe()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/lsappinfo")
+        process.arguments = ["info", "-only", "StatusLabel", "-app", bundle]
+        process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { continue }
+        let text = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        process.waitUntilExit()
+        return badgeCount(parseStatusLabel(text))
+    }
+    return nil
+}
+/// `"StatusLabel"={ "label"="3" }` → "3"; kCFNULL or missing → nil.
+func parseStatusLabel(_ text: String) -> String? {
+    guard let range = text.range(of: "\"label\"=\"") else { return nil }
+    let rest = text[range.upperBound...]
+    guard let end = rest.firstIndex(of: "\"") else { return nil }
+    return String(rest[..<end])
 }
 func badgeCount(_ label: String?) -> Int {
     guard let label, !label.isEmpty else { return 0 }
@@ -136,6 +159,9 @@ final class Detectors {
     private var timer: DispatchSourceTimer?
     var teams = false, telegram = false
     private var lastCall = false, lastBadge: Int?
+    // Teams opens the microphone briefly at launch and for device checks.
+    // A call must hold it for a few seconds, and ends after a short silence.
+    private var callSince: Date?, quietSince: Date?
     func configure(teams: Bool, telegram: Bool) {
         queue.async { [self] in
             self.teams = teams; self.telegram = telegram
@@ -151,7 +177,17 @@ final class Detectors {
     }
     private func tick() {
         if teams {
-            let call = teamsInCall()
+            let now = Date()
+            if teamsInCall() {
+                quietSince = nil
+                if callSince == nil { callSince = now }
+            } else {
+                callSince = nil
+                if quietSince == nil { quietSince = now }
+            }
+            let call = lastCall
+                ? !(quietSince.map { now.timeIntervalSince($0) >= 5 } ?? false)
+                : callSince.map { now.timeIntervalSince($0) >= 8 } ?? false
             if call != lastCall { lastCall = call; emit(["event": "teams_call", "active": call]) }
         }
         if telegram, let badge = telegramBadge() {

@@ -1,6 +1,6 @@
 # Unified Mac controls
 
-The `0.9.0-macos.1` fork combines the FF13 USB fixes, TFT uploads, keyboard
+The `0.9.1-macos.1` fork combines the FF13 USB fixes, TFT uploads, keyboard
 macros, Mac key remapping and the music knob in **AK820 Pro Modder.app**.
 The music code is a Swift static library linked into the Tauri executable.
 There is no separate helper application or helper Accessibility permission.
@@ -205,6 +205,23 @@ Click actions: play/pause, next, previous, open the player, **mute sound**,
 never chosen by default. Volume turns post the system volume keys, so macOS
 shows its indicator and unmutes when the level changes; without Accessibility
 the volume falls back to Core Audio.
+
+## Updating without losing Accessibility
+
+macOS stores the Accessibility permission against the code signature. Ad-hoc
+builds get a new signature every time, so the switch in System Settings stays
+on but no longer applies; knob clicks, Telegram detection and YouTube Music
+then stop working while volume still changes. Install with a signing
+certificate to keep the permission across updates:
+
+```sh
+AK820_SIGN_IDENTITY="Apple Development: you@example.com (TEAMID)" scripts/install-mac.sh
+```
+
+With an ad-hoc build, remove the app from Accessibility with “−”, add it with
+“+”, then choose Stop controls and quit and reopen it. The menu-bar icon shows
+⚠︎ and the Smart features tab explains this whenever the permission is missing.
+Diagnostics are written to `~/Library/Logs/AK820 Pro Modder/modder.log`.
 
 ## Robustness
 

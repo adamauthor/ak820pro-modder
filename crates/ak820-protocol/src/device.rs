@@ -207,7 +207,7 @@ pub fn enumerate() -> Result<Vec<DeviceInfo>> {
         found.push(info);
     }
     classify_candidates(&mut found);
-    info!(count = found.len(), "enumerated AK820 candidates");
+    debug!(count = found.len(), "enumerated AK820 candidates");
     Ok(found)
 }
 

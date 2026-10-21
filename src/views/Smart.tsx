@@ -100,6 +100,8 @@ export function Smart() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [rule, setRule] = useState("");
+  const [base, setBase] = useState<Lighting | null>(null);
+  useEffect(() => { void invoke<Lighting | null>("lighting_base_get").then(setBase).catch(() => {}); }, [timer?.phase]);
 
   useEffect(() => {
     let alive = true;
@@ -134,6 +136,12 @@ export function Smart() {
         "Подсветка реагирует на звонки Teams и Telegram, красный таймер помодоро и аниме-открытки на экран.")} />
     <ErrorBanner>{error}</ErrorBanner>
     {notice && <p role="status" className="text-sm text-good">{notice}</p>}
+    {mac && !mac.accessibility && <div className="rounded-lg border border-warn/40 bg-warn-soft p-4 text-sm text-fg-1">
+      <p className="font-medium">{t("Accessibility is off for this build", "Для этой сборки выключен Универсальный доступ")}</p>
+      <p className="mt-1 text-fg-2">{t("Knob clicks, Telegram detection, YouTube Music cards and the volume indicator need it. After every update macOS treats the app as new: in System Settings → Privacy & Security → Accessibility remove AK820 Pro Modder with “−”, add it again with “+”, then use Stop controls and quit from the menu bar and reopen the app.",
+        "Он нужен для кликов колёсика, отслеживания Telegram, открыток YouTube Music и индикатора громкости. После каждого обновления macOS считает приложение новым: в Системных настройках → Конфиденциальность и безопасность → Универсальный доступ удалите AK820 Pro Modder кнопкой «−», добавьте снова через «+», затем выберите «Остановить и выйти» в строке меню и откройте приложение заново.")}</p>
+      <Button className="mt-3" onClick={() => void invoke("mac_controls_permission").catch(() => {})}>{t("Open Accessibility settings", "Открыть настройки Универсального доступа")}</Button>
+    </div>}
     <div className="flex flex-wrap gap-2">
       <Badge tone={usb ? "good" : "warn"}>{usb ? t("USB connected", "USB подключён") : t("Lighting and screen need USB", "Подсветке и экрану нужен USB")}</Badge>
       {status?.battery != null && <Badge tone={status.battery <= 20 ? "warn" : "neutral"}>{t("Battery", "Батарея")} {status.battery}%</Badge>}
@@ -153,6 +161,7 @@ export function Smart() {
               <option value="static">{t("Steady", "Постоянно")}</option>
             </select>
             <span>{t("While Teams uses the microphone. Needs macOS 14.2+.", "Пока Teams использует микрофон. Нужна macOS 14.2+.")}</span>
+            <Button size="sm" disabled={busy || !usb} onClick={() => void run("smart_test", { kind: "teams" }, t("Showed the call colour for 6 seconds.", "Цвет звонка показан на 6 секунд."))}>{t("Test", "Проверить")}</Button>
           </div>
         </div>
         <div className="space-y-2">
@@ -160,11 +169,15 @@ export function Smart() {
           <div className="flex flex-wrap items-center gap-3 pl-11 text-sm text-fg-2">
             <ColorInput label={t("Telegram colour", "Цвет Telegram")} value={smart.telegram_color} onChange={c => setSmart({ ...smart, telegram_color: c })} />
             <NumberInput label={t("Flashes", "Вспышек")} min={1} max={10} value={smart.telegram_flashes} onChange={v => setSmart({ ...smart, telegram_flashes: v })} />
-            <span>{t("Reads the unread badge on Telegram's Dock icon (Accessibility).", "Следит за счётчиком непрочитанных на иконке Telegram в Dock (Универсальный доступ).")}</span>
+            <Button size="sm" disabled={busy || !usb} onClick={() => void run("smart_test", { kind: "telegram" }, t("Flashed.", "Мигнуло."))}>{t("Test", "Проверить")}</Button>
+            <span>{t("Telegram must be running on this Mac: Modder watches the unread counter on its Dock icon and flashes when it grows. Messages you read on the phone first, and muted chats, do not raise it.",
+              "Telegram должен быть запущен на этом Mac: Modder следит за счётчиком непрочитанных на его иконке в Dock и мигает, когда он растёт. Сообщения, прочитанные сначала на телефоне, и заглушённые чаты счётчик не меняют.")}</span>
           </div>
         </div>
         <div className="space-y-3">
           <Toggle checked={smart.apps_enabled} onChange={v => setSmart({ ...smart, apps_enabled: v })}>{t("Lighting per app", "Подсветка по приложениям")}</Toggle>
+          <p className="pl-11 text-sm text-fg-2">{t("Add an app and pick a colour: when that app comes to the front the keyboard switches to it, and returns to your lighting when you leave. Turn the switch on and press Save.",
+            "Добавьте приложение и выберите цвет: когда оно становится активным, клавиатура переключается на этот цвет, а при уходе из него возвращается к вашей подсветке. Включите переключатель и нажмите «Сохранить».")}</p>
           <div className="space-y-2 pl-11">
             {smart.app_rules.map((r, i) => <div key={r.bundle_id} className="flex flex-wrap items-center gap-3 text-sm">
               <span className="w-40 truncate">{r.name}</span>
@@ -189,6 +202,9 @@ export function Smart() {
             </div>
           </div>
         </div>
+        <p className="text-sm text-fg-2">{t("Your lighting (shown when nothing else is active)", "Ваша подсветка (когда ничего другого не активно)")}: {base
+          ? <><span className="mx-1 inline-block h-3 w-3 rounded-sm align-middle" style={{ background: `#${base.color}` }} />{base.mode} · #{base.color}</>
+          : t("not set — choose it once in the Lighting tab", "не задана — выберите её один раз во вкладке «Подсветка»")}</p>
         <p className="text-xs text-fg-3">{t("Priority: Teams call → Pomodoro → app → your lighting from the Lighting tab.",
           "Приоритет: звонок Teams → помодоро → приложение → ваша подсветка из вкладки «Подсветка».")}</p>
       </div>
@@ -246,7 +262,7 @@ export function Smart() {
               {characters.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
             </select></label>
           <label className="flex items-center justify-between gap-3 text-sm">{t("City for weather", "Город для погоды")}
-            <input className={INPUT} value={anime.city} placeholder="Almaty" onChange={e => setAnime({ ...anime, city: e.target.value })} /></label>
+            <input className={INPUT} value={anime.city} placeholder={t("Your time-zone city", "Город часового пояса")} onChange={e => setAnime({ ...anime, city: e.target.value })} /></label>
           <Toggle checked={anime.animated} onChange={v => setAnime({ ...anime, animated: v })}>{t("Animated (blinking, petals, rain)", "Анимация (моргание, лепестки, дождь)")}</Toggle>
           <Toggle checked={anime.consent} onChange={v => setAnime({ ...anime, consent: v })}>{t("Allow uploads that replace the keyboard's stored animation", "Разрешить загрузки, заменяющие сохранённую анимацию клавиатуры")}</Toggle>
           <Toggle checked={anime.auto} disabled={!anime.consent} onChange={v => setAnime({ ...anime, auto: v })}>{t("Refresh automatically", "Обновлять автоматически")}</Toggle>

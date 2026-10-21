@@ -14,7 +14,7 @@ A clean replacement for the Windows-only AJAZZ tool — native, transparent, scr
 
 </div>
 
-## Unified macOS fork — 0.9.0-macos.1
+## Unified macOS fork — 0.9.1-macos.1
 
 **New in 0.9:** smart lighting that reacts to Microsoft Teams calls and flashes
 blue for new Telegram messages, a red-lighting **Pomodoro** timer, procedurally
@@ -291,4 +291,4 @@ Hardware control surfaces are inherently risky. Read [`SECURITY.md`](SECURITY.md
 
 ---
 
-<sub>v0.9.0-macos.1 · made with ❤️ for the macOS mechanical-keyboard community · fork: [github.com/adamauthor/ak820pro-modder](https://github.com/adamauthor/ak820pro-modder) · upstream: [github.com/wsclx/ak820pro-modder](https://github.com/wsclx/ak820pro-modder)</sub>
+<sub>v0.9.1-macos.1 · made with ❤️ for the macOS mechanical-keyboard community · fork: [github.com/adamauthor/ak820pro-modder](https://github.com/adamauthor/ak820pro-modder) · upstream: [github.com/wsclx/ak820pro-modder](https://github.com/wsclx/ak820pro-modder)</sub>

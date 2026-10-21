@@ -101,9 +101,14 @@ pub fn weather_from_code(code: i64) -> Weather {
 /// Current temperature and weather for a city name. Only the city name is
 /// sent, to Open-Meteo (no account, no key).
 pub fn fetch_weather(city: &str) -> Result<(f32, Weather, String), String> {
-    if city.trim().is_empty() {
-        return Err("Enter a city for the weather card".into());
-    }
+    let fallback = timezone_city();
+    let city = if city.trim().is_empty() {
+        fallback
+            .as_deref()
+            .ok_or("Enter a city for the weather card")?
+    } else {
+        city
+    };
     let geo: serde_json::Value = serde_json::from_slice(&curl(&format!(
         "https://geocoding-api.open-meteo.com/v1/search?count=1&name={}",
         percent_encode(city.trim())
@@ -130,6 +135,18 @@ pub fn fetch_weather(city: &str) -> Result<(f32, Weather, String), String> {
         .ok_or("Weather service returned no temperature")? as f32;
     let code = forecast["current"]["weather_code"].as_i64().unwrap_or(3);
     Ok((temp, weather_from_code(code), name))
+}
+
+/// The Mac's time-zone city ("Asia/Almaty" → "Almaty"), used when no city
+/// is set. No location permission or lookup is involved.
+pub fn timezone_city() -> Option<String> {
+    let target = std::fs::read_link("/etc/localtime").ok()?;
+    city_from_zone(&target.to_string_lossy())
+}
+fn city_from_zone(path: &str) -> Option<String> {
+    let zone = path.split("zoneinfo/").nth(1)?;
+    let city = zone.rsplit('/').next()?.replace('_', " ");
+    (!city.is_empty() && zone.contains('/')).then_some(city)
 }
 
 /// Extracts the bytes of an AppleScript `«data TYPEhex»` literal.
@@ -170,7 +187,11 @@ pub fn fetch_cover(source: &str) -> Option<Vec<u8>> {
         )?)?,
         _ => return None,
     };
-    let image = image::load_from_memory(&bytes).ok()?;
+    cover_from(&bytes)
+}
+
+fn cover_from(bytes: &[u8]) -> Option<Vec<u8>> {
+    let image = image::load_from_memory(bytes).ok()?;
     let side = ak820_anime::SIZE;
     Some(
         image
@@ -193,7 +214,12 @@ fn local_clock() -> (i32, u8, u8, u8, u8) {
 }
 
 /// Collects live data for a scene. Blocking: run off the async runtime.
-pub fn build_scene(name: &str, config: &AnimeConfig) -> Result<Scene, String> {
+/// `youtube` is the YouTube Music player state read by the native layer.
+pub fn build_scene(
+    name: &str,
+    config: &AnimeConfig,
+    youtube: Option<serde_json::Value>,
+) -> Result<Scene, String> {
     let (year, month, day, weekday, hour) = local_clock();
     Ok(match name {
         "daily" => Scene::Daily {
@@ -213,13 +239,26 @@ pub fn build_scene(name: &str, config: &AnimeConfig) -> Result<Scene, String> {
             }
         }
         "now_playing" => {
-            let playing = crate::now_playing::fetch()
-                .filter(|p| p.is_playing)
-                .ok_or("Nothing is playing in Music or Spotify")?;
-            Scene::NowPlaying {
-                title: playing.title.clone().unwrap_or_default(),
-                artist: playing.artist.clone().unwrap_or_default(),
-                cover: fetch_cover(&playing.source),
+            if let Some(playing) = crate::now_playing::fetch().filter(|p| p.is_playing) {
+                Scene::NowPlaying {
+                    title: playing.title.clone().unwrap_or_default(),
+                    artist: playing.artist.clone().unwrap_or_default(),
+                    cover: fetch_cover(&playing.source),
+                }
+            } else if let Some(yt) = youtube {
+                let text = |key: &str| yt[key].as_str().unwrap_or_default().to_string();
+                let cover = yt["cover_url"]
+                    .as_str()
+                    .filter(|url| url.starts_with("https://"))
+                    .and_then(|url| curl(url).ok())
+                    .and_then(|bytes| cover_from(&bytes));
+                Scene::NowPlaying {
+                    title: text("title"),
+                    artist: text("artist"),
+                    cover,
+                }
+            } else {
+                return Err("Nothing is playing in YouTube Music, Music or Spotify. YouTube Music needs Accessibility for Modder".into());
             }
         }
         other => return Err(format!("Unknown anime scene: {other}")),
@@ -295,6 +334,15 @@ mod tests {
         assert_eq!(weather_from_code(61), Weather::Rain);
         assert_eq!(weather_from_code(73), Weather::Snow);
         assert_eq!(weather_from_code(96), Weather::Storm);
+        assert_eq!(
+            city_from_zone("/var/db/timezone/zoneinfo/Asia/Almaty").as_deref(),
+            Some("Almaty")
+        );
+        assert_eq!(
+            city_from_zone("/usr/share/zoneinfo/America/New_York").as_deref(),
+            Some("New York")
+        );
+        assert_eq!(city_from_zone("/usr/share/zoneinfo/UTC"), None);
     }
 
     #[test]

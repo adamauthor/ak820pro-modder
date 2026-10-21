@@ -475,3 +475,46 @@ final class MusicController {
         }
     }
 }
+
+/// Title, artist and cover of the YouTube Music web app, read from its
+/// player bar. Cover URLs come from the thumbnail image and are requested
+/// at a larger size. Falls back to the window title.
+func youtubeNowPlaying() -> [String: Any]? {
+    guard AXIsProcessTrusted(), !youtubeBundle.isEmpty,
+          let app = NSRunningApplication.runningApplications(withBundleIdentifier: youtubeBundle).first,
+          let window = playerWindow(app.processIdentifier) else { return nil }
+    var info: [String: Any] = ["source": "YouTube Music", "is_playing": findPlayer(window)?.playing == true]
+    var texts: [String] = [], links: [String] = [], cover: String?
+    if let bar = axFind(window, seconds: 2, where: { axRole($0) == kAXToolbarRole && ["player bar", "панель проигрывателя", "панель плеера"].contains(axName($0).lowercased()) }) {
+        var stack = [bar], count = 0
+        while let element = stack.popLast(), count < 400 {
+            count += 1
+            switch axRole(element) {
+            case kAXStaticTextRole:
+                if let value = axAttribute(element, kAXValueAttribute) as? String { texts.append(value) }
+            case "AXLink":
+                let name = axName(element); if !name.isEmpty { links.append(name) }
+            case kAXImageRole:
+                if cover == nil, let url = axAttribute(element, "AXURL") as? URL, ["googleusercontent", "ytimg"].contains(where: url.absoluteString.contains) { cover = url.absoluteString }
+            default: break
+            }
+            stack.append(contentsOf: axChildren(element).reversed())
+        }
+    }
+    let meaningful = { (s: String) -> Bool in
+        let t = s.trimmingCharacters(in: .whitespaces)
+        return !t.isEmpty && t != "•" && t.range(of: #"^[0-9:/ ]+$"#, options: .regularExpression) == nil
+    }
+    let candidates = (texts + links).filter(meaningful)
+    if let title = candidates.first { info["title"] = title }
+    if let artist = links.first(where: { meaningful($0) && $0 != candidates.first }) ?? candidates.dropFirst().first { info["artist"] = artist }
+    if info["title"] == nil, let title = axAttribute(window, kAXTitleAttribute) as? String {
+        let cleaned = title.replacingOccurrences(of: " - YouTube Music", with: "")
+        if cleaned != title && !cleaned.isEmpty { info["title"] = cleaned }
+    }
+    if let cover {
+        info["cover_url"] = cover.replacingOccurrences(of: #"=w\d+-h\d+"#, with: "=w544-h544", options: .regularExpression)
+    }
+    info["debug_texts"] = Array(candidates.prefix(6))
+    return info["title"] == nil ? nil : info
+}

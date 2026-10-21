@@ -1374,6 +1374,32 @@ async fn smart_save(
 ) -> Result<(), String> {
     smart.inner().save_smart(config).await
 }
+/// Plays a smart-lighting effect once so it can be checked without a real
+/// Telegram message or Teams call.
+#[tauri::command]
+async fn smart_test(smart: State<'_, Arc<Smart>>, kind: String) -> Result<(), String> {
+    if !smart_lighting::usb_connected() {
+        return Err(
+            "Connect the keyboard by USB: lighting needs the cable on this revision".into(),
+        );
+    }
+    let lighting = smart.lighting.clone();
+    match kind.as_str() {
+        "telegram" => {
+            let config = lighting.config().await;
+            lighting
+                .flash(&config.telegram_color, config.telegram_flashes)
+                .await;
+        }
+        "teams" => {
+            lighting.set_teams(true).await;
+            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+            lighting.set_teams(false).await;
+        }
+        _ => return Err("Unknown test".into()),
+    }
+    Ok(())
+}
 #[tauri::command]
 async fn lighting_base_get(smart: State<'_, Arc<Smart>>) -> Result<Option<LightingConfig>, String> {
     Ok(smart.lighting.base().await)
@@ -1486,6 +1512,21 @@ async fn icloud_settings_pull(app: AppHandle) -> Result<Option<u64>, String> {
     Ok(pulled)
 }
 
+fn open_log_file() -> Option<std::fs::File> {
+    let dir =
+        std::path::PathBuf::from(std::env::var_os("HOME")?).join("Library/Logs/AK820 Pro Modder");
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join("modder.log");
+    if std::fs::metadata(&path).is_ok_and(|m| m.len() > 2 * 1024 * 1024) {
+        let _ = std::fs::rename(&path, dir.join("modder.previous.log"));
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .ok()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // With panic = "abort" nothing else runs after a panic. Put the knob and
@@ -1499,12 +1540,25 @@ pub fn run() {
     if !mac_controls::claim_instance() {
         return;
     }
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_target(false)
-        .init();
+    // A menu-bar app has no visible stdout: also log to
+    // ~/Library/Logs/AK820 Pro Modder/modder.log (trimmed at 2 MB).
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    match open_log_file() {
+        Some(file) => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .with_ansi(false)
+            .with_writer(std::sync::Mutex::new(file))
+            .init(),
+        None => tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_target(false)
+            .init(),
+    }
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        "AK820 Pro Modder starting"
+    );
 
     let builder = tauri::Builder::default()
         .manage(mac_controls::State::default())
@@ -1590,6 +1644,7 @@ pub fn run() {
             now_playing_tft_status,
             smart_status,
             smart_save,
+            smart_test,
             lighting_base_get,
             pomodoro_status,
             pomodoro_command,

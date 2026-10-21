@@ -73,7 +73,20 @@ impl Smart {
         });
         let me = self.clone();
         tauri::async_runtime::spawn(async move {
+            // Automatic anime cards start one interval after launch, so
+            // restarts do not rewrite the keyboard's flash each time.
+            me.status.lock().await.last_anime = Some(Instant::now());
             me.push_detectors().await;
+            if let Ok(status) = mac_controls::request(&me.app, json!({"operation": "status"})).await
+            {
+                tracing::info!(
+                    accessibility = ?status["accessibility"],
+                    hotkeys = ?status["hotkey_active"],
+                    devices = %status["devices"],
+                    error = ?status["error"],
+                    "Mac controls status"
+                );
+            }
             let mut second = tokio::time::interval(Duration::from_secs(1));
             let mut ticks: u64 = 0;
             loop {
@@ -103,11 +116,16 @@ impl Smart {
                     .await
             }
             "teams_call" => {
+                tracing::info!(active = ?event["active"], "Teams call");
                 self.lighting
                     .set_teams(event["active"].as_bool() == Some(true))
                     .await;
             }
-            "telegram_message" => self.lighting.telegram_message().await,
+            "telegram_message" => {
+                tracing::info!(unread = ?event["unread"], "Telegram message: flashing");
+                self.lighting.telegram_message().await
+            }
+            "log" => tracing::warn!(message = %text("message"), "native"),
             "knob_action" if text("action") == "pomodoro" => self.pomodoro_toggle().await,
             "bluetooth_battery" => {
                 if let Some(level) = event["level"].as_u64() {
@@ -306,11 +324,19 @@ impl Smart {
                 minutes,
                 round: self.timer.lock().await.round,
             };
-            tauri::async_runtime::spawn_blocking(move || {
-                if smart_lighting::usb_connected() {
-                    if let Err(error) = anime_screen::upload(&scene, &anime) {
-                        tracing::warn!(%error, "Pomodoro anime card");
-                    }
+            let lighting = self.lighting.clone();
+            tauri::async_runtime::spawn(async move {
+                let uploaded = tauri::async_runtime::spawn_blocking(move || {
+                    smart_lighting::usb_connected()
+                        && anime_screen::upload(&scene, &anime)
+                            .inspect_err(|error| tracing::warn!(%error, "Pomodoro anime card"))
+                            .is_ok()
+                })
+                .await
+                .unwrap_or(false);
+                // The FF13 image transfer can change the LEDs; redraw the layer.
+                if uploaded {
+                    lighting.restore().await;
                 }
             });
         }
@@ -406,10 +432,23 @@ impl Smart {
         *self.anime_config.lock().await = config;
         Ok(())
     }
+    /// YouTube Music has no AppleScript; its player bar is read natively.
+    async fn youtube_playing(&self, scene: &str) -> Option<Value> {
+        if scene != "now_playing" {
+            return None;
+        }
+        let status = mac_controls::request(&self.app, json!({"operation": "now_playing"}))
+            .await
+            .ok()?;
+        let playing = status.get("now_playing").filter(|v| !v.is_null()).cloned();
+        tracing::info!(?playing, "YouTube Music now playing");
+        playing
+    }
     pub async fn anime_preview(&self, scene: String) -> Result<Vec<String>, String> {
         let config = self.anime_config().await;
+        let youtube = self.youtube_playing(&scene).await;
         tauri::async_runtime::spawn_blocking(move || {
-            let built = anime_screen::build_scene(&scene, &config)?;
+            let built = anime_screen::build_scene(&scene, &config, youtube)?;
             Ok(anime_screen::preview(&built, &config))
         })
         .await
@@ -417,13 +456,21 @@ impl Smart {
     }
     pub async fn anime_upload(&self, scene: &str) -> Result<(), String> {
         let config = self.anime_config().await;
-        let scene = scene.to_string();
-        tauri::async_runtime::spawn_blocking(move || {
-            let built = anime_screen::build_scene(&scene, &config)?;
+        let youtube = self.youtube_playing(scene).await;
+        let name = scene.to_string();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            let built = anime_screen::build_scene(&name, &config, youtube)?;
             anime_screen::upload(&built, &config)
         })
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string())?;
+        // The FF13 image transfer can change the LEDs; redraw the winning layer.
+        self.lighting.restore().await;
+        match &result {
+            Ok(()) => tracing::info!(scene, "anime card uploaded"),
+            Err(error) => tracing::warn!(scene, %error, "anime card failed"),
+        }
+        result?;
         self.status.lock().await.last_anime = Some(Instant::now());
         Ok(())
     }

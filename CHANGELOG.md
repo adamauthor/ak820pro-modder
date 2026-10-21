@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [0.9.1-macos.1] — Fixes after hardware testing
+
+- Teams call detection ignores the microphone blips Teams makes at launch: a
+  call needs 8 s of capture and ends after 5 s of silence. The Teams colour is
+  a saturated violet (#7A00FF) because #6264A7 rendered as bluish white.
+- After every TFT upload the winning lighting layer is redrawn (the FF13 image
+  transfer could leave Pomodoro red off). Automatic anime cards start one
+  interval after launch instead of at every start.
+- Weather falls back to the Mac's time-zone city when no city is set.
+- Now-playing cards read YouTube Music's player bar (title, artist, cover).
+- Telegram unread count is read from Launch Services (no Accessibility needed),
+  with the Dock as a fallback; Test buttons for Telegram and Teams lighting.
+- The menu-bar item is an icon with only the Pomodoro countdown, so it is no
+  longer hidden behind the notch; ⚠︎ and a menu entry appear when
+  Accessibility is missing, with an explanation in Smart features.
+- Lighting view starts from your saved lighting; Smart features shows it.
+- Log file in `~/Library/Logs/AK820 Pro Modder/`; `scripts/install-mac.sh`
+  signs with a stable identity so Accessibility survives updates.
+
 ## [0.9.0-macos.1] — Smart lighting, Pomodoro and anime screen
 
 ### Added

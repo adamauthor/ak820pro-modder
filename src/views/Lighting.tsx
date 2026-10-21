@@ -57,6 +57,14 @@ export function Lighting() {
   const inflight = useRef(false);
   const queued = useRef<LightingConfig | null>(null);
 
+  // Start from the lighting last applied here (FF13 cannot read it back),
+  // so smart features and this view agree on "your lighting".
+  useEffect(() => {
+    invoke<LightingConfig | null>("lighting_base_get")
+      .then((saved) => { if (saved) setCfg(saved); })
+      .catch(() => {});
+  }, []);
+
   useEffect(() => {
     invoke<LightingModeInfo[]>("list_lighting_modes")
       .then(setModes)

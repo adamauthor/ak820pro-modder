@@ -14,7 +14,10 @@ final class NativeControls: NSObject, NSMenuDelegate {
     var installed: [InstalledApp] = []
     var devices: [ConnectedKeyboard] = []
     var message = "Ready"
-    var lastError: String?
+    var lastError: String? {
+        // Errors also go to Modder's log file, where they can be diagnosed.
+        didSet { if let lastError, lastError != oldValue { emit(["event": "log", "message": lastError]) } }
+    }
     var timer: Timer?
     var hotkeys: [EventHotKeyRef] = []
     var handler: EventHandlerRef?
@@ -258,17 +261,24 @@ final class NativeControls: NSObject, NSMenuDelegate {
     func installStatusItem() {
         guard statusItem == nil else { return }
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "AK820"; item.button?.toolTip = "AK820 Pro Modder"
+        // Keep the item narrow: a long title is hidden behind the notch.
+        item.button?.image = NSImage(systemSymbolName: "keyboard", accessibilityDescription: "AK820 Pro Modder")
+        item.button?.image?.isTemplate = true
+        item.button?.imagePosition = .imageLeading
+        item.button?.toolTip = "AK820 Pro Modder"
+        item.autosaveName = "AK820ProModder"
         let menu = NSMenu(); menu.delegate = self; menu.autoenablesItems = false
         item.menu = menu; statusItem = item
         updateStatusTitle()
     }
     func setMenuState(_ state: [String: Any]) { menuState = state; updateStatusTitle() }
     func updateStatusTitle() {
-        var parts = ["AK820"]
-        if let timer = menuState["pomodoro_label"] as? String, !timer.isEmpty { parts.append("🍅 \(timer)") }
-        if let level = menuState["battery"] as? Int { parts.append("\(level)%") }
-        statusItem?.button?.title = parts.joined(separator: " · ")
+        // Only the Pomodoro countdown and a missing permission are shown next
+        // to the icon; battery and everything else live in the menu.
+        var title = ""
+        if let timer = menuState["pomodoro_label"] as? String, !timer.isEmpty { title = " \(timer)" }
+        if !(AXIsProcessTrusted() && CGPreflightPostEventAccess()) { title += " ⚠︎" }
+        statusItem?.button?.title = title
     }
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
@@ -285,6 +295,10 @@ final class NativeControls: NSObject, NSMenuDelegate {
         func tr(_ en: String, _ russian: String) -> String { ru ? russian : en }
         let open = NSMenuItem(title: tr("Open AK820 Pro Modder", "Открыть AK820 Pro Modder"), action: #selector(openWindow), keyEquivalent: "")
         open.target = self; menu.addItem(open)
+        if !(AXIsProcessTrusted() && CGPreflightPostEventAccess()) {
+            let fix = NSMenuItem(title: tr("⚠︎ Allow Accessibility (knob clicks, Telegram, players)…", "⚠︎ Разрешите Универсальный доступ (клики, Telegram, плееры)…"), action: #selector(openAccessibility), keyEquivalent: "")
+            fix.target = self; menu.addItem(fix)
+        }
         if let level = menuState["battery"] as? Int { menu.addItem(item(tr("Battery: \(level)%", "Батарея: \(level)%"), enabled: false)) }
         if let profile = activeProfile?.name { menu.addItem(item(tr("Profile: \(profile)", "Профиль: \(profile)"), enabled: false)) }
         if let status = menuState["pomodoro_status"] as? String, !status.isEmpty { menu.addItem(item(status, enabled: false)) }
@@ -316,6 +330,11 @@ final class NativeControls: NSObject, NSMenuDelegate {
         let quit = NSMenuItem(title: tr("Stop controls and quit", "Остановить и выйти"), action: #selector(quitApplication), keyEquivalent: "")
         quit.target = self; menu.addItem(quit)
     }
+    @objc func openAccessibility() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+    }
     @objc func menuEvent(_ sender: NSMenuItem) { if let event = sender.representedObject as? [String: Any] { emit(event) } }
     @objc func openWindow() { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first { $0.title == "AK820 Pro Modder" }?.makeKeyAndOrderFront(nil) }
     @objc func quitApplication() { NSApp.terminate(nil) }
@@ -342,6 +361,12 @@ public func ak820MacControlsRequest(_ input: UnsafePointer<CChar>) -> UnsafeMuta
         case "menu_state": controls.setMenuState(request["state"] as? [String: Any] ?? [:])
         case "notify": postNotification(title: request["title"] as? String ?? "AK820", body: request["body"] as? String ?? "")
         case "detectors": controls.detectors.configure(teams: request["teams"] as? Bool == true, telegram: request["telegram"] as? Bool == true)
+        case "now_playing":
+            // Read on the AppKit thread; AX calls are bounded by short timeouts.
+            var result = controls.snapshot()
+            result["now_playing"] = youtubeNowPlaying() ?? NSNull()
+            return try encodeJSON(result).withCString { strdup($0) }
+        case "telegram_test": emit(["event": "telegram_message", "unread": -1])
         case "battery": controls.battery.read { level in emit(["event": "bluetooth_battery", "level": level as Any? ?? NSNull()]) }
         case "shutdown": try controls.shutdown()
         case "status": break
@@ -458,6 +483,8 @@ public func ak820MacControlsSelftest() -> Int32 {
         muted.base_remaps = [ProfileRemap(source: 4, destination: 5)]
         try muted.validate()
         guard GestureBindings().single == "toggle" else { return 28 } // mute is never a default
+        guard parseStatusLabel(#""StatusLabel"={ "label"="5" }"#) == "5", parseStatusLabel(#""StatusLabel"={ "label"=kCFNULL }"#) == nil,
+              parseStatusLabel("") == nil else { return 29 }
         return 0
     } catch { return 6 }
 }
