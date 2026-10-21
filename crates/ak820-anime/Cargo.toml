@@ -1,0 +1,20 @@
+[package]
+name = "ak820-anime"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Procedural anime-style pixel-art scenes for the AK820 Pro 128x128 TFT display"
+
+[lib]
+name = "ak820_anime"
+
+[dependencies]
+serde = { workspace = true }
+embedded-graphics = "0.8"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

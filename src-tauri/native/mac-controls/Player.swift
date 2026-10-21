@@ -210,6 +210,9 @@ func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID: pid_
     }
     guard confirmed() else { throw MusicError.failed("The player did not confirm seeking") }
 }
+func displayName(_ route: String) -> String {
+    route == "youtube_music" ? "YouTube Music" : route == "spotify" ? "Spotify" : "Apple Music"
+}
 func serviceBundle(_ service: String, youtube: String) -> String {
     service == "spotify" ? "com.spotify.client" : service == "apple_music" ? "com.apple.Music" : youtube
 }
@@ -232,6 +235,10 @@ final class MusicController {
     var service = "youtube_music"
     var followPlaying = true
     private var lastRoute: String? // Worker queue only.
+    // Worker queue only: the surface used by the last seek, reused for a
+    // quick burst of knob detents instead of walking the AX tree each time.
+    private var seekCache: (route: String, surface: MediaSurface, time: TimeInterval)?
+    private var pendingSeek = 0 // Main queue only: detents that arrived while busy.
     private var busy = false // Main queue only, prevents duplicate starts on repeated clicks.
     var isBusy: Bool { busy }
     private let requestLock = NSLock()
@@ -245,7 +252,7 @@ final class MusicController {
         requestLock.lock(); defer { requestLock.unlock() }
         return requestID == request
     }
-    func cancel() { _ = beginRequest(); busy = false; worker.async { [self] in lastRoute = nil } }
+    func cancel() { _ = beginRequest(); busy = false; pendingSeek = 0; worker.async { [self] in lastRoute = nil; seekCache = nil } }
     var status: (String) -> Void = { _ in }
 
     func requestMusicAccess() {
@@ -257,13 +264,26 @@ final class MusicController {
             finish(result == "allowed" ? "Player control allowed" : "Allow player control in System Settings → Privacy & Security → Automation", request: request)
         }
     }
-    func perform(_ action: String) {
-        guard !busy else { return }
+    func perform(_ action: String, steps: Int = 1) {
+        let seek = action == "seek_forward" || action == "seek_backward"
+        guard !busy else {
+            if seek { pendingSeek += action == "seek_forward" ? 1 : -1 }
+            return
+        }
+        let seekSeconds = Double(5 * max(1, steps)) * (action == "seek_forward" ? 1 : -1)
         guard AXIsProcessTrusted() || musicAutomationPermission(service) == "allowed" else { status("Enable Accessibility for AK820 Pro Modder"); return }
         busy = true
         let request = beginRequest(), preferred = service, follow = followPlaying, youtube = youtubeBundle
         worker.async { [self] in
             guard isCurrent(request) else { return }
+            if seek, let cache = seekCache, ProcessInfo.processInfo.systemUptime - cache.time < 3, !axRole(cache.surface.root).isEmpty,
+               let app = NSRunningApplication.runningApplications(withBundleIdentifier: serviceBundle(cache.route, youtube: youtube)).first {
+                do {
+                    try seekSurface(cache.surface, by: seekSeconds, applicationPID: app.processIdentifier)
+                    seekCache = (cache.route, cache.surface, ProcessInfo.processInfo.systemUptime)
+                    finish("\(displayName(cache.route)): \(action)", request: request); return
+                } catch { seekCache = nil }
+            }
             var route = preferred
             var surfaces: [String: MediaSurface] = [:]
             var native: [String: NativeMusicClient] = [:]
@@ -290,7 +310,7 @@ final class MusicController {
                 if action == "liked" { launchAndPlay(forceLiked: true, bundle: youtube, request: request); return }
                 if let client = native[route] {
                     let wasPlaying = (try? client.isPlaying()) == true
-                    try client.perform(action)
+                    try client.perform(action, seconds: abs(seekSeconds))
                     if action == "toggle" { try confirmNative(client, playing: !wasPlaying, request: request) }
                     lastRoute = route
                     finish("\(route == "spotify" ? "Spotify" : "Apple Music"): \(action == "toggle" ? wasPlaying ? "paused" : "playing" : action)", request: request)
@@ -307,7 +327,8 @@ final class MusicController {
                     case "seek_forward", "seek_backward":
                         if nativeMusicBundle(route) != nil { throw MusicError.failed("Allow player control in Music settings") }
                         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else { throw MusicError.failed("The music app closed before seeking") }
-                        try seekSurface(surface, by: action == "seek_forward" ? 5 : -5, applicationPID: app.processIdentifier)
+                        try seekSurface(surface, by: seekSeconds, applicationPID: app.processIdentifier)
+                        seekCache = (route, surface, ProcessInfo.processInfo.systemUptime)
                     default: throw MusicError.failed("Unknown music action")
                     }
                     lastRoute = route
@@ -443,6 +464,14 @@ final class MusicController {
     }
 
     private func finish(_ message: String, request: UInt64) {
-        DispatchQueue.main.async { [self] in guard isCurrent(request) else { return }; status(message); busy = false }
+        DispatchQueue.main.async { [self] in
+            guard isCurrent(request) else { return }
+            status(message); busy = false
+            // Replay detents turned during the previous seek as one combined jump.
+            if pendingSeek != 0 {
+                let steps = pendingSeek; pendingSeek = 0
+                perform(steps > 0 ? "seek_forward" : "seek_backward", steps: abs(steps))
+            }
+        }
     }
 }

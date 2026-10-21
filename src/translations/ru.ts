@@ -75,6 +75,7 @@ export const russian: Record<string, string> = {
   Lighting: "Подсветка",
   System: "Система",
   "Mac controls": "Управление на Mac",
+  "Smart features": "Умные функции",
   Keymap: "Клавиши",
   Macros: "Макросы",
   Automations: "Автоматизации",

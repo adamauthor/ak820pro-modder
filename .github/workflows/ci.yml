@@ -2,9 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -59,6 +58,14 @@ jobs:
 
       - name: cargo test
         run: cargo test --workspace --lib
+
+      # The Swift fixtures run inside a Rust test on macOS. Fail loudly if a
+      # filter or cfg change ever makes that test silently disappear.
+      - name: Native Mac controls self-test ran
+        run: |
+          set -o pipefail
+          cargo test -p ak820pro-app --lib native_mapping_ownership 2>&1 | tee native-test.log
+          grep -q "test result: ok. 1 passed" native-test.log
 
   frontend-build:
     name: Frontend • typecheck + build

@@ -27,28 +27,34 @@ struct ControlConfig: Codable, Equatable {
     var click_interval_ms: Int
     var bindings: GestureBindings
     var profiles: [AppProfile]
+    var base_remaps: [ProfileRemap] = []
     var advanced: Bool { ["youtube_music", "smart"].contains(knob_mode) }
     func validate() throws {
         guard ["original", "play_pause", "youtube_music", "smart"].contains(knob_mode),
               ["youtube_music", "spotify", "apple_music"].contains(music_service),
               (220...500).contains(click_interval_ms), profiles.count <= 32 else { throw MusicError.failed("Invalid Mac controls configuration") }
-        let clicks = ["toggle", "next", "previous", "open", "none"]
+        let clicks = clickActions
         let turns = ["volume", "seek", "zoom", "tabs", "scroll", "none"]
         for binding in [bindings] + profiles.map(\.bindings) {
             guard [binding.single, binding.double, binding.triple].allSatisfy(clicks.contains),
                   [binding.rotation, binding.shift_rotation].allSatisfy(turns.contains) else { throw MusicError.failed("Unknown gesture action") }
         }
+        try validateRemaps(base_remaps)
         var ids = Set<String>(), bundles = Set<String>()
         for p in profiles {
             guard !p.id.isEmpty, p.id.count <= 100, ids.insert(p.id).inserted, bundles.insert(p.bundle_id).inserted,
                   !p.name.trimmingCharacters(in: .whitespaces).isEmpty, p.name.count <= 100,
                   p.bundle_id.count <= 200, p.bundle_id.contains("."), p.remaps.count <= 128 else { throw MusicError.failed("Profiles need unique apps, IDs and valid names") }
-            var sources = Set<UInt16>()
-            for r in p.remaps {
-                guard (4...231).contains(r.source), (4...231).contains(r.destination),
-                      ![109, 110, 111].contains(r.source), ![109, 110, 111].contains(r.destination),
-                      sources.insert(r.source).inserted else { throw MusicError.failed("Invalid or reserved profile key mapping") }
-            }
+            try validateRemaps(p.remaps)
+        }
+    }
+    func validateRemaps(_ remaps: [ProfileRemap]) throws {
+        guard remaps.count <= 128 else { throw MusicError.failed("Invalid or reserved key mapping") }
+        var sources = Set<UInt16>()
+        for r in remaps {
+            guard (4...231).contains(r.source), (4...231).contains(r.destination),
+                  ![109, 110, 111].contains(r.source), ![109, 110, 111].contains(r.destination),
+                  sources.insert(r.source).inserted else { throw MusicError.failed("Invalid or reserved key mapping") }
         }
     }
     func profile(for bundle: String?) -> AppProfile? {
@@ -56,6 +62,9 @@ struct ControlConfig: Codable, Equatable {
         return profiles.first { $0.enabled && $0.bundle_id == bundle }
     }
 }
+
+// Mute actions are available but never chosen by default.
+let clickActions = ["toggle", "next", "previous", "open", "mute", "mic_mute", "pomodoro", "none"]
 
 // Monotonic timestamps make the boundary deterministic in fixtures and immune to clock changes.
 struct ClickSequence {

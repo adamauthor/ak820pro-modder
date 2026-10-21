@@ -7,7 +7,7 @@ import Darwin
 import Foundation
 
 func jsonValue<T: Encodable>(_ value: T) -> Any { (try? JSONSerialization.jsonObject(with: JSONEncoder().encode(value))) ?? NSNull() }
-final class NativeControls: NSObject {
+final class NativeControls: NSObject, NSMenuDelegate {
     var config: ControlConfig?
     var directory: URL?
     var apps: [YouTubeApp] = []
@@ -21,12 +21,16 @@ final class NativeControls: NSObject {
     var registeredRotation = false
     var heldClick = false
     let controller = MusicController()
+    let detectors = Detectors()
+    let battery = BluetoothBattery()
     var statusItem: NSStatusItem?
+    var menuState: [String: Any] = [:]
     var backgroundActivity: NSObjectProtocol?
     var applicationObserver: NSObjectProtocol?
     var instanceObserver: NSObjectProtocol?
-    var refreshingMappings = false
-    var refreshMappingsAgain = false
+    // hidutil runs on this queue so AppKit never waits on child processes.
+    let mappingQueue = DispatchQueue(label: "local.ak820pro.mappings")
+    var mappingGeneration = 0
     var activeBundle: String?
     var activeProfile: AppProfile?
     var pendingClick: DispatchWorkItem?
@@ -52,30 +56,24 @@ final class NativeControls: NSObject {
         if backgroundActivity == nil {
             backgroundActivity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Respond to AK820 controls while the settings window is closed")
         }
-        if statusItem == nil {
-            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-            item.button?.title = "AK820"; item.button?.toolTip = "AK820 Pro Modder"
-            let menu = NSMenu()
-            let open = NSMenuItem(title: "Open AK820 Pro Modder", action: #selector(openWindow), keyEquivalent: "")
-            open.target = self; menu.addItem(open); menu.addItem(.separator())
-            let quit = NSMenuItem(title: "Stop controls and quit", action: #selector(quitApplication), keyEquivalent: "")
-            quit.target = self; menu.addItem(quit); item.menu = menu; statusItem = item
-        }
+        installStatusItem()
         let previous = config, previousYouTube = youtubeBundle
         cancelClicks(); controller.cancel(); previewUntil = 0
         config = next; directory = URL(fileURLWithPath: path, isDirectory: true)
         apps = youtubeApps(); installed = installedApplications()
         youtubeBundle = (apps.first { $0.id == next.youtube_app_id } ?? (next.youtube_app_id == nil ? apps.first : nil))?.id ?? ""
         controller.service = next.music_service; controller.followPlaying = next.follow_playing
-        do { try refresh(force: true); lastError = nil }
+        do { try refresh(force: true, wait: true); lastError = nil }
         catch {
             config = previous; youtubeBundle = previousYouTube
             controller.service = previous?.music_service ?? "youtube_music"; controller.followPlaying = previous?.follow_playing ?? true
-            try? refresh(force: true); throw error
+            try? refresh(force: true, wait: true); throw error
         }
         if applicationObserver == nil {
-            applicationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
-                do { try self?.refreshContext() } catch { if String(describing: error) != "Release held keys to switch profile mappings" { self?.lastError = String(describing: error) } }
+            applicationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+                let bundle = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+                emit(["event": "frontmost", "bundle": bundle as Any? ?? NSNull()])
+                self?.refreshQuietly()
             }
         }
         if instanceObserver == nil {
@@ -83,11 +81,16 @@ final class NativeControls: NSObject {
         }
         if timer == nil {
             let timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
-                do { try self?.refresh(force: true) } catch { if String(describing: error) != "Release held keys to switch profile mappings" { self?.lastError = String(describing: error) } }
+                guard let self else { return }
+                do { try self.refresh(force: true, wait: false) } catch { self.report(error) }
             }
             self.timer = timer; RunLoop.main.add(timer, forMode: .common)
         }
     }
+    func report(_ error: Error) {
+        if String(describing: error) != "Release held keys to switch profile mappings" { lastError = String(describing: error) }
+    }
+    func refreshQuietly() { do { try refreshContext(wait: false) } catch { report(error) } }
     func registerHotkeys(rotation: Bool) throws {
         if !hotkeys.isEmpty && registeredRotation == rotation { return }
         unregisterHotkeys()
@@ -127,27 +130,21 @@ final class NativeControls: NSObject {
         if let handler { RemoveEventHandler(handler) }
         hotkeys = []; handler = nil; heldClick = false; cancelClicks()
     }
-    func refresh(force: Bool = false) throws {
+    func refresh(force: Bool = false, wait: Bool) throws {
         if advanced { try registerHotkeys(rotation: config?.capture_rotation == true) }
-        try refreshContext(force: force)
+        try refreshContext(force: force, wait: wait)
         if !advanced { unregisterHotkeys() }
+        updateMessage()
+    }
+    func updateMessage() {
         if advanced && !AXIsProcessTrusted() { message = "Enable Accessibility for AK820 Pro Modder, then Stop controls and quit and reopen it" }
         else if devices.isEmpty { message = "Waiting for AK820 over USB or Bluetooth" }
         else if mode == "original" { message = "Previous knob mapping restored" }
         else if message == "Ready" || message.hasPrefix("Waiting") || message.hasPrefix("Previous") { message = "Ready — USB and Bluetooth" }
     }
-    func refreshContext(force: Bool = false) throws {
-        // waitUntilExit may deliver another activation/timer notification while
-        // the current mapping transaction owns its file lock. Coalesce it.
-        guard !refreshingMappings else { refreshMappingsAgain = true; return }
-        refreshingMappings = true
-        defer {
-            refreshingMappings = false
-            if refreshMappingsAgain {
-                refreshMappingsAgain = false
-                DispatchQueue.main.async { [weak self] in do { try self?.refreshContext(force: true) } catch { self?.lastError = String(describing: error) } }
-            }
-        }
+    /// Applies the mappings for the frontmost app. wait=true is for user
+    /// actions that must report errors; background refreshes never block AppKit.
+    func refreshContext(force: Bool = false, wait: Bool) throws {
         let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let profile = advanced ? config?.profile(for: bundle) : nil
         guard force || bundle != activeBundle || profile != activeProfile else { return }
@@ -155,20 +152,42 @@ final class NativeControls: NSObject {
         if (profile?.remaps ?? []) != (activeProfile?.remaps ?? []),
            (0..<128).contains(where: { ![kVK_F18, kVK_F19, kVK_F20].contains($0) && CGEventSource.keyState(.combinedSessionState, key: CGKeyCode($0)) }) {
             pendingProfile?.cancel()
-            let task = DispatchWorkItem { [weak self] in do { try self?.refreshContext(force: true) } catch { if String(describing: error) != "Release held keys to switch profile mappings" { self?.lastError = String(describing: error) } } }
+            let task = DispatchWorkItem { [weak self] in self?.refreshQuietly() }
             pendingProfile = task; DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: task)
             throw MusicError.failed("Release held keys to switch profile mappings")
         }
         pendingProfile?.cancel(); pendingProfile = nil
         guard let directory else { return }
-        devices = try updateControlMappings(target: mode == "original" ? nil : advanced ? triggerUsage : playUsage,
-            rotation: advanced && config?.capture_rotation == true, remaps: profile?.remaps ?? [], directory: directory)
+        let target = mode == "original" ? nil : advanced ? triggerUsage : playUsage
+        let rotation = advanced && config?.capture_rotation == true
+        let remaps = profile?.remaps ?? [], base = config?.base_remaps ?? []
+        if bundle != activeBundle || profile != activeProfile { emit(["event": "profile", "name": profile?.name as Any? ?? NSNull()]) }
         activeBundle = bundle; activeProfile = profile
-        if lastError == "Release held keys to switch profile mappings" { lastError = nil }
+        mappingGeneration += 1
+        let generation = mappingGeneration
+        let work = { try updateControlMappings(target: target, rotation: rotation, remaps: remaps, base: base, directory: directory) }
+        if wait {
+            devices = try mappingQueue.sync(execute: work)
+            if lastError == "Release held keys to switch profile mappings" { lastError = nil }
+            return
+        }
+        mappingQueue.async { [weak self] in
+            let result = Result(catching: work)
+            DispatchQueue.main.async {
+                guard let self, generation == self.mappingGeneration else { return }
+                switch result {
+                case .success(let devices):
+                    let changed = devices.map(\.profile) != self.devices.map(\.profile)
+                    self.devices = devices; self.updateMessage()
+                    if changed { emit(["event": "devices", "devices": jsonValue(devices)]) }
+                case .failure(let error): self.report(error)
+                }
+            }
+        }
     }
     func cancelClicks() { pendingClick?.cancel(); pendingClick = nil; sequence = ClickSequence() }
     func click() {
-        do { try refreshContext() } catch { lastError = String(describing: error); return }
+        refreshQuietly()
         let time = ProcessInfo.processInfo.systemUptime, interval = Double(config?.click_interval_ms ?? 300) / 1000
         if sequence.count == 0 { sequencePreview = preview }
         if let expired = sequence.press(at: time, interval: interval) { dispatchClick(expired) }
@@ -182,18 +201,29 @@ final class NativeControls: NSObject {
         let bindings = activeProfile?.bindings ?? config.bindings
         let action = count == 1 ? bindings.single : count == 2 ? bindings.double : bindings.triple
         record(gesture: count == 1 ? "single" : count == 2 ? "double" : "triple", action: action)
-        if !sequencePreview && !preview && action != "none" { controller.perform(action) }
+        guard !sequencePreview && !preview && action != "none" else { return }
+        perform(click: action)
+    }
+    func perform(click action: String) {
+        do {
+            switch action {
+            case "mute": try toggleOutputMute(); message = "Sound mute toggled"
+            case "mic_mute": message = try toggleMicrophoneMute() ? "Microphone muted" : "Microphone on"
+            case "pomodoro": emit(["event": "knob_action", "action": "pomodoro"])
+            default: controller.perform(action)
+            }
+        } catch { lastError = String(describing: error) }
     }
     func turn(_ direction: Int, shift: Bool) {
+        refreshQuietly()
+        guard let config else { return }
+        let bindings = activeProfile?.bindings ?? config.bindings
+        let action = shift ? bindings.shift_rotation : bindings.rotation
+        record(gesture: "\(shift ? "shift_" : "")\(direction > 0 ? "right" : "left")", action: action)
+        guard !preview else { return }
         do {
-            try refreshContext()
-            guard let config else { return }
-            let bindings = activeProfile?.bindings ?? config.bindings
-            let action = shift ? bindings.shift_rotation : bindings.rotation
-            record(gesture: "\(shift ? "shift_" : "")\(direction > 0 ? "right" : "left")", action: action)
-            guard !preview else { return }
             switch action {
-            case "volume": try changeOutputVolume(direction > 0 ? 0.0625 : -0.0625)
+            case "volume": try stepVolume(direction)
             case "seek": controller.perform(direction > 0 ? "seek_forward" : "seek_backward")
             case "zoom", "tabs", "scroll": try performContextTurn(action, direction: direction, expectedBundle: activeBundle)
             default: break
@@ -215,12 +245,78 @@ final class NativeControls: NSObject {
     }
     func shutdown() throws {
         controller.cancel(); cancelClicks(); pendingProfile?.cancel(); pendingProfile = nil; timer?.invalidate(); timer = nil
+        detectors.configure(teams: false, telegram: false)
         if let applicationObserver { NSWorkspace.shared.notificationCenter.removeObserver(applicationObserver) }; applicationObserver = nil
         if let instanceObserver { DistributedNotificationCenter.default().removeObserver(instanceObserver) }; instanceObserver = nil
         if let backgroundActivity { ProcessInfo.processInfo.endActivity(backgroundActivity) }; backgroundActivity = nil
         defer { unregisterHotkeys() }
-        if let directory { _ = try updateKnobMappings(target: nil, directory: directory) }
+        if let directory { _ = try mappingQueue.sync { try updateKnobMappings(target: nil, directory: directory) } }
     }
+
+    // MARK: Menu bar
+
+    func installStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        item.button?.title = "AK820"; item.button?.toolTip = "AK820 Pro Modder"
+        let menu = NSMenu(); menu.delegate = self; menu.autoenablesItems = false
+        item.menu = menu; statusItem = item
+        updateStatusTitle()
+    }
+    func setMenuState(_ state: [String: Any]) { menuState = state; updateStatusTitle() }
+    func updateStatusTitle() {
+        var parts = ["AK820"]
+        if let timer = menuState["pomodoro_label"] as? String, !timer.isEmpty { parts.append("🍅 \(timer)") }
+        if let level = menuState["battery"] as? Int { parts.append("\(level)%") }
+        statusItem?.button?.title = parts.joined(separator: " · ")
+    }
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        func item(_ title: String, _ event: [String: Any]? = nil, checked: Bool = false, enabled: Bool = true) -> NSMenuItem {
+            let entry = NSMenuItem(title: title, action: event == nil ? nil : #selector(menuEvent(_:)), keyEquivalent: "")
+            entry.target = self; entry.representedObject = event; entry.state = checked ? .on : .off
+            entry.isEnabled = enabled && (event != nil); return entry
+        }
+        func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenuItem {
+            let parent = NSMenuItem(title: title, action: nil, keyEquivalent: ""), child = NSMenu()
+            child.autoenablesItems = false; items.forEach(child.addItem); parent.submenu = child; return parent
+        }
+        let ru = (menuState["language"] as? String) == "ru"
+        func tr(_ en: String, _ russian: String) -> String { ru ? russian : en }
+        let open = NSMenuItem(title: tr("Open AK820 Pro Modder", "Открыть AK820 Pro Modder"), action: #selector(openWindow), keyEquivalent: "")
+        open.target = self; menu.addItem(open)
+        if let level = menuState["battery"] as? Int { menu.addItem(item(tr("Battery: \(level)%", "Батарея: \(level)%"), enabled: false)) }
+        if let profile = activeProfile?.name { menu.addItem(item(tr("Profile: \(profile)", "Профиль: \(profile)"), enabled: false)) }
+        if let status = menuState["pomodoro_status"] as? String, !status.isEmpty { menu.addItem(item(status, enabled: false)) }
+        menu.addItem(.separator())
+        let modes = [("original", tr("Original action", "Исходное действие")), ("play_pause", tr("Play / pause", "Воспроизведение / пауза")),
+                     ("youtube_music", "YouTube Music"), ("smart", tr("Custom gestures", "Свои жесты"))]
+        menu.addItem(submenu(tr("Knob", "Колёсико"), modes.map { item($0.1, ["event": "menu", "command": "knob_mode", "value": $0.0], checked: mode == $0.0) }))
+        let usb = menuState["usb"] as? Bool == true
+        let lighting = [("off", tr("Off", "Выключить")), ("white", tr("White", "Белый")), ("warm", tr("Warm", "Тёплый")), ("rainbow", tr("Rainbow", "Радуга")),
+                        ("breath", tr("Breathing", "Дыхание")), ("restore", tr("My lighting", "Моя подсветка"))]
+        menu.addItem(submenu(tr("Lighting", "Подсветка") + (usb ? "" : tr(" (USB)", " (USB)")), lighting.map { item($0.1, ["event": "menu", "command": "lighting", "value": $0.0], enabled: usb) }))
+        let smart = menuState["smart"] as? [String: Bool] ?? [:]
+        menu.addItem(submenu(tr("Smart lighting", "Умная подсветка"), [
+            item(tr("Teams calls", "Звонки Teams"), ["event": "menu", "command": "smart", "value": "teams"], checked: smart["teams"] == true),
+            item(tr("Telegram messages", "Сообщения Telegram"), ["event": "menu", "command": "smart", "value": "telegram"], checked: smart["telegram"] == true),
+            item(tr("App lighting", "Подсветка по приложениям"), ["event": "menu", "command": "smart", "value": "apps"], checked: smart["apps"] == true),
+        ]))
+        let phase = menuState["pomodoro"] as? String ?? "idle"
+        var pomodoro = [item(tr("Start focus", "Начать фокус"), ["event": "menu", "command": "pomodoro", "value": "start"])]
+        if phase != "idle" {
+            pomodoro.append(item(phase == "paused" ? tr("Resume", "Продолжить") : tr("Pause", "Пауза"), ["event": "menu", "command": "pomodoro", "value": phase == "paused" ? "resume" : "pause"]))
+            pomodoro.append(item(tr("Skip phase", "Пропустить этап"), ["event": "menu", "command": "pomodoro", "value": "skip"]))
+            pomodoro.append(item(tr("Stop", "Остановить"), ["event": "menu", "command": "pomodoro", "value": "stop"]))
+        }
+        menu.addItem(submenu(tr("Pomodoro", "Помодоро"), pomodoro))
+        let scenes = [("daily", tr("Greeting card", "Открытка дня")), ("weather", tr("Weather", "Погода")), ("now_playing", tr("Now playing", "Сейчас играет"))]
+        menu.addItem(submenu(tr("Anime screen", "Аниме-экран") + (usb ? "" : " (USB)"), scenes.map { item($0.1, ["event": "menu", "command": "anime", "value": $0.0], enabled: usb) }))
+        menu.addItem(.separator())
+        let quit = NSMenuItem(title: tr("Stop controls and quit", "Остановить и выйти"), action: #selector(quitApplication), keyEquivalent: "")
+        quit.target = self; menu.addItem(quit)
+    }
+    @objc func menuEvent(_ sender: NSMenuItem) { if let event = sender.representedObject as? [String: Any] { emit(event) } }
     @objc func openWindow() { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first { $0.title == "AK820 Pro Modder" }?.makeKeyAndOrderFront(nil) }
     @objc func quitApplication() { NSApp.terminate(nil) }
 }
@@ -232,10 +328,10 @@ public func ak820MacControlsRequest(_ input: UnsafePointer<CChar>) -> UnsafeMuta
         guard let request = try JSONSerialization.jsonObject(with: Data(String(cString: input).utf8)) as? [String: Any] else { throw MusicError.failed("Invalid request") }
         switch request["operation"] as? String {
         case "configure": try controls.configure(request)
-        case "refresh": controls.lastError = nil; controls.apps = youtubeApps(); controls.installed = installedApplications(); try controls.refresh(force: true)
+        case "refresh": controls.lastError = nil; controls.apps = youtubeApps(); controls.installed = installedApplications(); try controls.refresh(force: true, wait: true)
         case "press", "liked", "action":
             guard controls.advanced else { throw MusicError.failed("Enable custom knob controls first") }
-            controls.controller.perform(request["operation"] as? String == "action" ? request["action"] as? String ?? "toggle" : request["operation"] as? String == "liked" ? "liked" : "toggle")
+            controls.perform(click: request["operation"] as? String == "action" ? request["action"] as? String ?? "toggle" : request["operation"] as? String == "liked" ? "liked" : "toggle")
         case "music_access": controls.controller.requestMusicAccess()
         case "automation_settings": NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
         case "preview":
@@ -243,9 +339,10 @@ public func ak820MacControlsRequest(_ input: UnsafePointer<CChar>) -> UnsafeMuta
             controls.cancelClicks(); controls.previewUntil = request["enabled"] as? Bool == true ? ProcessInfo.processInfo.systemUptime + 30 : 0; controls.events = []
         case "permission":
             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-        case "base_edit":
-            guard NSWorkspace.shared.frontmostApplication?.bundleIdentifier == Bundle.main.bundleIdentifier else { throw MusicError.failed("Open Modder before editing base key mappings") }
-            try controls.refreshContext(force: true)
+        case "menu_state": controls.setMenuState(request["state"] as? [String: Any] ?? [:])
+        case "notify": postNotification(title: request["title"] as? String ?? "AK820", body: request["body"] as? String ?? "")
+        case "detectors": controls.detectors.configure(teams: request["teams"] as? Bool == true, telegram: request["telegram"] as? Bool == true)
+        case "battery": controls.battery.read { level in emit(["event": "bluetooth_battery", "level": level as Any? ?? NSNull()]) }
         case "shutdown": try controls.shutdown()
         case "status": break
         default: throw MusicError.failed("Unknown Mac control operation")
@@ -349,6 +446,18 @@ public func ak820MacControlsSelftest() -> Int32 {
               youtubeActionAfterReopen("toggle", alreadyRunning: false) == "play",
               youtubeActionAfterReopen("seek_forward", alreadyRunning: true) == "seek_forward",
               youtubeActionAfterReopen("next", alreadyRunning: true) == "next" else { return 23 }
+        let layered = layeredRemaps(base: [ProfileRemap(source: 4, destination: 5), ProfileRemap(source: 6, destination: 7)], profile: [ProfileRemap(source: 6, destination: 8)])
+        guard layered == [ProfileRemap(source: 4, destination: 5), ProfileRemap(source: 6, destination: 8)] else { return 24 }
+        do { _ = try decodeOwnership(Data(#"{"version":3,"profiles":{}}"#.utf8)); return 25 } catch { }
+        guard badgeCount(nil) == 0, badgeCount("") == 0, badgeCount("12") == 12, badgeCount("•") == 1,
+              isTeamsBundle("com.microsoft.teams2"), !isTeamsBundle("com.apple.Music") else { return 26 }
+        var muted = config
+        muted.bindings.single = "mute"; muted.bindings.double = "mic_mute"; muted.bindings.triple = "pomodoro"
+        muted.base_remaps = [ProfileRemap(source: 4, destination: 111)]
+        do { try muted.validate(); return 27 } catch { }
+        muted.base_remaps = [ProfileRemap(source: 4, destination: 5)]
+        try muted.validate()
+        guard GestureBindings().single == "toggle" else { return 28 } // mute is never a default
         return 0
     } catch { return 6 }
 }

@@ -84,6 +84,12 @@ struct MappingOwnership: Codable {
     var profiles: [String: [String: MuteOwnership]] = [:]
 }
 func decodeOwnership(_ data: Data) throws -> MappingOwnership {
+    // A newer Modder may have written a format this build cannot interpret.
+    // Refuse instead of guessing so its recovery records stay intact.
+    if let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+       let version = object["version"] as? Int, version > 2 {
+        throw MusicError.failed("Mapping records were saved by a newer Modder; no changes made")
+    }
     if let current = try? JSONDecoder().decode(MappingOwnership.self, from: data), current.version == 2 {
         for rules in current.profiles.values {
             for key in rules.keys {
@@ -123,17 +129,17 @@ let turnUpUsage: UInt64 = (7 << 32) | 109
 let turnDownUsage: UInt64 = (7 << 32) | 110
 let usbKeys = KeyboardProfile(id: "usb-keys", matching: ["VendorID": 3141, "ProductID": 32778, "Product": "AK820", "Transport": "USB", "PrimaryUsagePage": 1, "PrimaryUsage": 6])
 
-func updateControlMappings(target: UInt64?, rotation: Bool, remaps: [ProfileRemap], directory: URL) throws -> [ConnectedKeyboard] {
+func updateControlMappings(target: UInt64?, rotation: Bool, remaps: [ProfileRemap], base: [ProfileRemap] = [], directory: URL) throws -> [ConnectedKeyboard] {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
     let lease: NativeFileLock
     do { lease = try NativeFileLock(directory.appendingPathComponent("native-map.lock")) }
     catch NativeLockError.busy { throw MusicError.failed("Mac mappings are busy; retry in a moment") }
     catch { throw MusicError.failed("Cannot lock Mac mappings") }
     return try withExtendedLifetime(lease) {
-        try updateLockedMappings(target: target, rotation: rotation, remaps: remaps, directory: directory)
+        try updateLockedMappings(target: target, rotation: rotation, remaps: remaps, base: base, directory: directory)
     }
 }
-private func updateLockedMappings(target: UInt64?, rotation: Bool, remaps: [ProfileRemap], directory: URL) throws -> [ConnectedKeyboard] {
+private func updateLockedMappings(target: UInt64?, rotation: Bool, remaps: [ProfileRemap], base: [ProfileRemap], directory: URL) throws -> [ConnectedKeyboard] {
     let ownershipFile = directory.appendingPathComponent("knob-ownership.json")
     var document = FileManager.default.fileExists(atPath: ownershipFile.path) ? try decodeOwnership(Data(contentsOf: ownershipFile)) : MappingOwnership()
     let listing = try runHidutil(["list", "--ndjson", "--matching", "{\"VendorID\":3141}"])
@@ -156,7 +162,8 @@ private func updateLockedMappings(target: UInt64?, rotation: Bool, remaps: [Prof
             if rotation { targets[volumeUpUsage] = turnUpUsage; targets[volumeDownUsage] = turnDownUsage }
         }
         if profile.id != "usb" {
-            for r in remaps { targets[(7 << 32) | UInt64(r.source)] = (7 << 32) | UInt64(r.destination) }
+            // Base mappings are the lowest layer; an app profile overrides them.
+            for r in layeredRemaps(base: base, profile: remaps) { targets[(7 << 32) | UInt64(r.source)] = (7 << 32) | UInt64(r.destination) }
         }
         // Reserved marker destinations must never already belong to normal keys.
         let previous = document.profiles[profile.id] ?? [:]
@@ -174,7 +181,7 @@ private func updateLockedMappings(target: UInt64?, rotation: Bool, remaps: [Prof
     for (profile, _, _, owner) in changes {
         document.profiles[profile.id] = (document.profiles[profile.id] ?? [:]).merging(owner) { _, new in new }
     }
-    try encoder.encode(document).write(to: ownershipFile, options: .atomic)
+    try writeIfChanged(encoder.encode(document), to: ownershipFile)
     var applied: [(KeyboardProfile, [KeyMapping])] = []
     do {
         for (profile, current, desired, _) in changes where current != desired {
@@ -196,8 +203,26 @@ private func updateLockedMappings(target: UInt64?, rotation: Bool, remaps: [Prof
         throw error
     }
     for (profile, _, _, owner) in changes { document.profiles[profile.id] = owner }
-    try encoder.encode(document).write(to: ownershipFile, options: .atomic)
+    try writeIfChanged(encoder.encode(document), to: ownershipFile)
     return connected
+}
+// The periodic refresh usually changes nothing; avoid rewriting the file every tick.
+func writeIfChanged(_ data: Data, to url: URL) throws {
+    if (try? Data(contentsOf: url)) == data { return }
+    try data.write(to: url, options: .atomic)
+}
+func layeredRemaps(base: [ProfileRemap], profile: [ProfileRemap]) -> [ProfileRemap] {
+    let overridden = Set(profile.map(\.source))
+    return base.filter { !overridden.contains($0.source) } + profile
+}
+
+// Crash recovery: restores every recorded original without touching AppKit
+// state, so it is safe from a panic hook on any thread.
+@_cdecl("ak820_mac_emergency_restore")
+public func ak820MacEmergencyRestore() -> Int32 {
+    let directory = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/io.github.wsclx.ak820pro-modder", isDirectory: true)
+    do { _ = try updateControlMappings(target: nil, rotation: false, remaps: [], directory: directory); return 0 }
+    catch { return 1 }
 }
 func updateKnobMappings(target: UInt64?, directory: URL) throws -> [ConnectedKeyboard] {
     try updateControlMappings(target: target, rotation: false, remaps: [], directory: directory)

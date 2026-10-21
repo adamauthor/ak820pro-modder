@@ -12,37 +12,50 @@ type Step = { code: string; down: boolean; delay_ms: number };
 type HostMacro = { id: number; name: string; shortcut: string; steps: Step[] };
 type Status = { accessibility: boolean; running: boolean };
 const INPUT = "rounded border border-line bg-surface-base px-3 py-2 text-sm text-fg-0";
+const MODIFIERS = new Set(["ShiftLeft", "ShiftRight", "ControlLeft", "ControlRight", "AltLeft", "AltRight", "MetaLeft", "MetaRight"]);
 const USAGES = [...Array.from({ length: 112 }, (_, i) => i + 4), ...Array.from({ length: 8 }, (_, i) => i + 224)];
 
 export function HostKeymap() {
   const [remaps, setRemaps] = useState<Remap[]>([]);
+  const [saved, setSaved] = useState<Remap[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
-  async function read() {
+  const dirty = JSON.stringify(remaps) !== JSON.stringify(saved);
+  async function load() {
+    setError(null);
+    try { const value = await invoke<Remap[]>("host_remaps_saved"); setRemaps(value); setSaved(value); }
+    catch (e) { setError(formatError(e)); }
+  }
+  useEffect(() => { void load(); }, []);
+  async function readCurrent() {
+    if (dirty && !window.confirm(t("Discard unsaved changes and read the mappings macOS uses now?", "Отменить несохранённые изменения и прочитать текущие назначения macOS?"))) return;
     setBusy(true); setError(null);
     try { setRemaps(await invoke<Remap[]>("host_remaps_get")); }
     catch (e) { setError(formatError(e)); }
     finally { setBusy(false); }
   }
-  useEffect(() => { void read(); }, []);
   async function apply(restore: boolean) {
     setBusy(true); setError(null); setNotice("");
     try {
-      setRemaps(await invoke<Remap[]>("host_remaps_apply", { remaps, restore }));
-      setNotice(restore ? "Previous Mac mappings restored." : "Mappings applied and read back from macOS.");
+      const value = await invoke<Remap[]>("host_remaps_apply", { remaps, restore });
+      setRemaps(value); setSaved(value);
+      setNotice(restore ? t("Previous Mac mappings restored.", "Прежние назначения macOS восстановлены.") : t("Mappings applied. They come back automatically after reconnecting.", "Назначения применены и вернутся автоматически после переподключения."));
+      window.dispatchEvent(new Event("mac-controls-updated"));
     } catch (e) { setError(formatError(e)); }
     finally { setBusy(false); }
   }
   return <div className="space-y-5">
     <PageHeader title={t("Key remapping on this Mac")} description={t("For the connected USB or Bluetooth AK820. Changes affect this keyboard on this Mac.")} />
-    <p className="text-sm text-fg-2">{t("macOS forgets key mappings after disconnecting or restarting. Load the saved draft and reapply when needed; USB and Bluetooth keep separate drafts. Configure the knob in Mac controls. Fn combinations remain controlled by the keyboard. Key names are physical positions; typed characters follow your Mac input language.")}</p>
+    <p className="text-sm text-fg-2">{t("Saved mappings apply to the AK820 over USB and Bluetooth and are reapplied automatically after reconnecting or waking the Mac. App profiles in Mac controls can override single keys. Fn combinations remain controlled by the keyboard. Key names are physical positions; typed characters follow your Mac input language.",
+      "Сохранённые назначения действуют для AK820 по USB и Bluetooth и автоматически возвращаются после переподключения или пробуждения Mac. Профили приложений в «Управлении на Mac» могут переопределять отдельные клавиши. Сочетания с Fn остаются за клавиатурой. Названия клавиш — физические позиции; символы зависят от раскладки Mac.")}</p>
     {error && <ErrorBanner>{error}</ErrorBanner>}
     {notice && <p role="status" className="text-sm text-good">{notice}</p>}
+    {dirty && <p role="status" className="text-sm text-warn">{t("Unsaved changes — apply them to keep them.", "Есть несохранённые изменения — примените их.")}</p>}
     <Card title={t("Key mappings for this connection")}>
       <div className="space-y-3">
         {remaps.map((r, i) => <div key={i} className="flex flex-wrap items-center gap-3">
-          {(["source", "destination"] as const).map((field, j) => <label key={field} className="text-sm">{j === 0 ? "From " : "To "}<select aria-label={`${field} ${i + 1}`} className={INPUT} value={r[field]} disabled={busy} onChange={e => setRemaps(remaps.map((v, n) => n === i ? { ...v, [field]: Number(e.target.value) } : v))}>
+          {(["source", "destination"] as const).map((field, j) => <label key={field} className="text-sm">{j === 0 ? t("From ", "С ") : t("To ", "На ")}<select aria-label={`${field} ${i + 1}`} className={INPUT} value={r[field]} disabled={busy} onChange={e => setRemaps(remaps.map((v, n) => n === i ? { ...v, [field]: Number(e.target.value) } : v))}>
             {USAGES.map(hid => <option key={hid} value={hid}>{hidName(hid)} ({hid})</option>)}
           </select></label>)}
           <Button disabled={busy} onClick={() => setRemaps(remaps.filter((_, n) => n !== i))}>{t("Remove")}</Button>
@@ -50,10 +63,10 @@ export function HostKeymap() {
         {!remaps.length && <p className="text-sm text-fg-2">{t("No Mac remapping for this keyboard.")}</p>}
         <div className="flex flex-wrap gap-2">
           <Button disabled={busy || remaps.length >= 128} onClick={() => setRemaps([...remaps, { source: USAGES.find(u => !remaps.some(r => r.source === u)) ?? 4, destination: 41 }])}>{t("Add mapping")}</Button>
-          <Button variant="primary" disabled={busy} onClick={() => void apply(false)}>{t("Apply on this Mac")}</Button>
-          <Button disabled={busy} onClick={() => void apply(true)}>{t("Undo app changes")}</Button>
-          <Button disabled={busy} onClick={() => void read()}>{t("Read current")}</Button>
-          <Button disabled={busy} onClick={() => { setError(null); void invoke<Remap[]>("host_remaps_saved").then(setRemaps).catch(e => setError(formatError(e))); }}>{t("Load saved draft")}</Button>
+          <Button variant="primary" disabled={busy || !dirty} onClick={() => void apply(false)}>{t("Apply on this Mac")}</Button>
+          <Button disabled={busy || !saved.length} onClick={() => void apply(true)}>{t("Undo app changes")}</Button>
+          <Button disabled={busy} onClick={() => void readCurrent()}>{t("Read current")}</Button>
+          <Button disabled={busy || !dirty} onClick={() => setRemaps(saved)}>{t("Discard changes", "Отменить изменения")}</Button>
         </div>
       </div>
     </Card>
@@ -105,7 +118,7 @@ export function HostMacros() {
   return <div className="space-y-5">
     <PageHeader title={t("Keyboard macros on this Mac")} description={t("Record key presses, releases and delays. Stored in the app; runs while the app is open.")} />
     <p className="text-sm text-fg-2">{t("Playback types into the foreground app using your Mac input language. Shortcuts work from any keyboard on this Mac. Use a shortcut such as Control+Alt+M, or leave it blank and use Run. Release the shortcut keys before playback. Fn, mouse actions and onboard macro storage are unavailable in this fallback.")}</p>
-    <p className="text-sm text-fg-2">{t("Accessibility:")}{" "}{status?.accessibility ? "allowed" : "required for playback — enable AK820 Pro Modder in System Settings → Privacy & Security → Accessibility"}{t(". After enabling Accessibility, use Stop controls and quit in the AK820 menu, then reopen the app once. Recording listens only inside the box below.")}</p>
+    <p className="text-sm text-fg-2">{t("Accessibility:")}{" "}{status?.accessibility ? t("allowed", "разрешён") : t("required for playback — enable AK820 Pro Modder in System Settings → Privacy & Security → Accessibility", "нужен для воспроизведения — включите AK820 Pro Modder в Системных настройках → Конфиденциальность и безопасность → Универсальный доступ")}{t(". After enabling Accessibility, use Stop controls and quit in the AK820 menu, then reopen the app once. Recording listens only inside the box below.")}</p>
     {status?.running && <p role="status" className="text-sm text-fg-1">{t("Macro playback is running. Stop playback cancels it.")}</p>}
     {error && <ErrorBanner>{error}</ErrorBanner>}
     {notice && <p role="status" className="text-sm text-fg-1">{notice}</p>}
@@ -123,13 +136,22 @@ export function HostMacros() {
         <label className="block text-sm">{t("Mac shortcut")}{" "}<input type="text" className={INPUT} disabled={busy || recording} placeholder={t("Control+Alt+M")} value={macro.shortcut} onChange={e => update({ shortcut: e.target.value })} /></label>
         <div ref={recorder} tabIndex={0} role="textbox" aria-label={t("Macro recording area")} className="rounded border border-line p-5 outline-none focus:border-accent-400" onBlur={stopRecording} onKeyDown={e => {
           if (!recording) return; e.preventDefault(); e.stopPropagation();
-          if (e.repeat || held.current.has(e.code)) return;
+          if (e.repeat) return;
+          // WebKit drops key-up events while ⌘ is held, so a second ⌘V would look
+          // like a repeated key-down. Close the earlier press before recording it.
+          const releaseFirst = held.current.has(e.code) && e.metaKey && !MODIFIERS.has(e.code);
+          if (held.current.has(e.code) && !releaseFirst) return;
           if (!CODE_TO_HID[e.code] || ["CapsLock", "PrintScreen", "ScrollLock", "Pause", "Insert"].includes(e.code)) { setError(`Unsupported key: ${e.code}`); return; }
           if (steps.length >= 240) { stopRecording(); return; }
-          const now = performance.now(); const step = { code: e.code, down: true, delay_ms: Math.min(10000, Math.round(now - last.current)) }; last.current = now; held.current.add(e.code); setSteps(s => [...s, step]);
+          const now = performance.now(); const step = { code: e.code, down: true, delay_ms: Math.min(10000, Math.round(now - last.current)) }; last.current = now; held.current.add(e.code);
+          setSteps(s => releaseFirst ? [...s, { code: e.code, down: false, delay_ms: 0 }, step] : [...s, step]);
         }} onKeyUp={e => {
           if (!recording) return; e.preventDefault(); e.stopPropagation(); if (!held.current.delete(e.code)) return;
-          const now = performance.now(); const step = { code: e.code, down: false, delay_ms: Math.min(10000, Math.round(now - last.current)) }; last.current = now; setSteps(s => [...s, step]);
+          // Keys pressed with ⌘ never report their release: release them with ⌘.
+          const orphans = e.code.startsWith("Meta") ? [...held.current].filter(code => !MODIFIERS.has(code)) : [];
+          orphans.forEach(code => held.current.delete(code));
+          const now = performance.now(); const step = { code: e.code, down: false, delay_ms: Math.min(10000, Math.round(now - last.current)) }; last.current = now;
+          setSteps(s => [...s, ...orphans.map(code => ({ code, down: false, delay_ms: 0 })), step]);
         }}>{recording ? `Recording ${steps.length} events — click outside to stop.` : "Click Record, then type here. Click outside to stop."}</div>
         <div className="flex flex-wrap gap-2">
           <Button disabled={busy || recording} onClick={() => { setSteps([]); held.current.clear(); last.current = performance.now(); setError(null); setRecording(true); recorder.current?.focus(); }}>{t("Record")}</Button>

@@ -5,6 +5,7 @@ import {
   useState,
   type PropsWithChildren,
 } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { russian } from "./translations/ru";
 export type Language = "ru" | "en";
 const KEY = "ak820-language";
@@ -42,6 +43,8 @@ export function LanguageProvider({ children }: PropsWithChildren) {
   };
   useEffect(() => {
     document.documentElement.lang = value;
+    // The menu bar and notifications follow the app language.
+    void invoke("set_ui_language", { language: value }).catch(() => {});
   }, [value]);
   return (
     <Context.Provider value={{ language: value, setLanguage }}>

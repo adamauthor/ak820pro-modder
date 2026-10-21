@@ -59,6 +59,8 @@ pub struct Config {
     pub click_interval_ms: u16,
     pub bindings: Bindings,
     pub profiles: Vec<AppProfile>,
+    /// Mac key mappings that apply in every app; app profiles override them.
+    pub base_remaps: Vec<ProfileRemap>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -72,6 +74,7 @@ impl Default for Config {
             click_interval_ms: 300,
             bindings: Bindings::default(),
             profiles: Vec::new(),
+            base_remaps: Vec::new(),
         }
     }
 }
@@ -120,7 +123,11 @@ fn configure_request(app: &AppHandle, config: &Config) -> Result<Value, String> 
 
 /// Setup and shutdown are called by Tauri on the AppKit main thread.
 pub fn initialize(app: &AppHandle) -> Result<(), String> {
-    let config = read_config(&config_path(app)?)?;
+    let mut config = read_config(&config_path(app)?)?;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    if migrate_remap_backups(&dir, &mut config)? {
+        write_config(&config_path(app)?, &config)?;
+    }
     *app.state::<State>()
         .config
         .lock()
@@ -131,9 +138,83 @@ pub fn initialize(app: &AppHandle) -> Result<(), String> {
 pub fn shutdown() {
     let _ = native::request(json!({"operation":"shutdown"}));
 }
+
+/// Earlier builds kept base remaps in per-connection backup files written by
+/// the Rust side. They now live in the config so macOS reapplies them after
+/// every reconnect. The old files are kept, renamed, for manual recovery.
+fn migrate_remap_backups(dir: &Path, config: &mut Config) -> Result<bool, String> {
+    let mut migrated = false;
+    for name in crate::host_keyboard::BACKUP_FILES {
+        let path = dir.join(name);
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        if config.base_remaps.is_empty() {
+            config.base_remaps = crate::host_keyboard::backup_remaps(&bytes)?
+                .into_iter()
+                .map(|r| ProfileRemap {
+                    source: r.source,
+                    destination: r.destination,
+                })
+                .collect();
+        }
+        std::fs::rename(&path, path.with_extension("json.migrated")).map_err(|e| e.to_string())?;
+        migrated = true;
+    }
+    Ok(migrated)
+}
+
+/// Claims the single running controller. Returns false only when another
+/// copy owns it; an unexpected lock failure is logged and the app still runs.
 #[cfg(target_os = "macos")]
 pub fn claim_instance() -> bool {
-    native::claim_instance(!std::env::args().any(|arg| arg == "--background"))
+    match native::claim_instance(!std::env::args().any(|arg| arg == "--background")) {
+        0 => false,
+        1 => true,
+        _ => {
+            eprintln!("AK820 Pro Modder: single-instance lock unavailable; continuing");
+            true
+        }
+    }
+}
+
+/// Restores the knob and key mappings from their recovery records. Safe to
+/// call from a panic hook on any thread: it never touches AppKit state.
+pub fn emergency_restore() {
+    native::emergency_restore();
+}
+
+static EVENTS: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<Value>> =
+    std::sync::OnceLock::new();
+
+/// Routes native events (menu choices, detectors, knob actions) to `sink`.
+pub fn install_event_bridge() -> tokio::sync::mpsc::UnboundedReceiver<Value> {
+    let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let _ = EVENTS.set(sender);
+    native::set_event_callback();
+    receiver
+}
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn deliver_event(text: &str) {
+    match serde_json::from_str::<Value>(text) {
+        Ok(value) => {
+            if let Some(sender) = EVENTS.get() {
+                let _ = sender.send(value);
+            }
+        }
+        Err(error) => tracing::warn!(%error, "invalid native event"),
+    }
+}
+/// Fire-and-forget native request for background modules (menu, notices).
+pub async fn request(app: &AppHandle, request: Value) -> Result<Value, String> {
+    on_main(app, request).await
+}
+pub fn config(app: &AppHandle) -> Config {
+    app.state::<State>()
+        .config
+        .lock()
+        .map(|c| c.clone())
+        .unwrap_or_default()
 }
 pub fn marker_reserved(app: &AppHandle, usage: u16) -> bool {
     app.state::<State>()
@@ -160,10 +241,6 @@ async fn on_main(app: &AppHandle, request: Value) -> Result<Value, String> {
     })
     .map_err(|e| e.to_string())?;
     receiver.await.map_err(|e| e.to_string())?
-}
-pub async fn prepare_base_remaps(app: &AppHandle) -> Result<(), String> {
-    on_main(app, json!({"operation":"base_edit"})).await?;
-    Ok(())
 }
 fn with_config(app: &AppHandle, mut status: Value) -> Result<Value, String> {
     status["config"] = serde_json::to_value(
@@ -224,6 +301,11 @@ pub async fn mac_controls_music_access(app: AppHandle, settings: bool) -> Result
 }
 #[tauri::command]
 pub async fn mac_controls_save(app: AppHandle, config: Config) -> Result<Value, String> {
+    save(&app, config).await
+}
+/// Validates, applies and persists a configuration; rolls back on failure.
+pub async fn save(app: &AppHandle, config: Config) -> Result<Value, String> {
+    let app = app.clone();
     let state = app.state::<State>();
     let _guard = state.save_lock.lock().await;
     if config
@@ -346,8 +428,28 @@ mod native {
         #[cfg(test)]
         pub(super) fn ak820_mac_controls_selftest() -> i32;
     }
-    pub fn claim_instance(show_window: bool) -> bool {
-        unsafe { ak820_mac_claim_instance(i32::from(show_window)) == 1 }
+    pub fn claim_instance(show_window: bool) -> i32 {
+        unsafe { ak820_mac_claim_instance(i32::from(show_window)) }
+    }
+    extern "C" {
+        fn ak820_mac_set_event_callback(callback: Option<extern "C" fn(*const c_char)>);
+        fn ak820_mac_emergency_restore() -> i32;
+    }
+    extern "C" fn on_event(text: *const c_char) {
+        if text.is_null() {
+            return;
+        }
+        // Swift keeps ownership; copy before returning.
+        let text = unsafe { CStr::from_ptr(text) }
+            .to_string_lossy()
+            .into_owned();
+        super::deliver_event(&text);
+    }
+    pub fn set_event_callback() {
+        unsafe { ak820_mac_set_event_callback(Some(on_event)) }
+    }
+    pub fn emergency_restore() {
+        unsafe { ak820_mac_emergency_restore() };
     }
     pub fn request(value: Value) -> Result<Value, String> {
         let input = CString::new(value.to_string()).map_err(|e| e.to_string())?;
@@ -372,6 +474,8 @@ mod native {
 #[cfg(not(target_os = "macos"))]
 mod native {
     use super::*;
+    pub fn set_event_callback() {}
+    pub fn emergency_restore() {}
     pub fn request(_: Value) -> Result<Value, String> {
         Ok(
             json!({"supported":false,"youtube_supported":false,"accessibility":false,"hotkey_active":false,"devices":[],"youtube_apps":[],"youtube_app_id":null,"message":"Mac controls require macOS","error":null}),

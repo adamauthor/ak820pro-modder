@@ -14,14 +14,20 @@ A clean replacement for the Windows-only AJAZZ tool — native, transparent, scr
 
 </div>
 
-## Unified macOS fork — 0.8.0-macos.1
+## Unified macOS fork — 0.9.0-macos.1
 
-The Mac controls workspace adds multi-click knob gestures, Shift + turning,
-automatic application profiles (including app-specific key mappings), and a
-choice of YouTube Music, Spotify or Apple Music. Settings have a redesigned
-RU/EN interface, a persistent unsaved draft and a physical-gesture preview.
+**New in 0.9:** smart lighting that reacts to Microsoft Teams calls and flashes
+blue for new Telegram messages, a red-lighting **Pomodoro** timer, procedurally
+drawn **anime cards** for the TFT (greeting, weather, now playing), a richer
+menu bar with battery level and quick switches, low-battery notifications,
+mute/mic-mute knob actions, Mac key mappings that come back after reconnecting,
+and one-file settings backup / iCloud sync. See
+[Smart features](docs/SMART-FEATURES.md) and the [changelog](CHANGELOG.md).
+
+0.8 added multi-click knob gestures, Shift + turning, automatic application
+profiles (including app-specific key mappings), and a choice of YouTube Music,
+Spotify or Apple Music, with a RU/EN interface.
 See [Mac controls](docs/MACOS-CONTROLS.md) for setup and capability limits.
-
 
 This is [adamauthor's fork](https://github.com/adamauthor/ak820pro-modder) of
 [wsclx's AK820 Pro Modder](https://github.com/wsclx/ak820pro-modder), retaining the
@@ -32,8 +38,9 @@ Mac key mappings/macros, Bluetooth knob support, YouTube Music fallback and
 optional launch at login. All Mac controls run inside Modder; no separate
 music helper is needed.
 
-[Download the macOS release](https://github.com/adamauthor/ak820pro-modder/releases/tag/v0.8.0-macos.1)
+[Download the macOS release](https://github.com/adamauthor/ak820pro-modder/releases)
 · [Mac controls setup and behavior](docs/MACOS-CONTROLS.md)
+· [Smart features](docs/SMART-FEATURES.md)
 · [FF13 hardware evidence and limits](docs/MACOS-800A.md)
 
 Open **Mac controls**, choose the knob action and save. If no player is active,
@@ -124,6 +131,9 @@ cargo build -p ak820-cli --release
 ./target/release/ak820 rgb rainbow               # 128-LED rainbow gradient
 ./target/release/ak820 macros list           # dump every stored macro
 ./target/release/ak820 hid-descriptors       # debug: report sizes per interface
+./target/release/ak820 battery               # FF13: battery over USB
+./target/release/ak820 anime --animated --out frames/       # render an anime card
+./target/release/ak820 anime --upload --allow-legacy        # …and send it to the TFT
 ```
 
 Full CLI help is `ak820 --help`.
@@ -198,6 +208,7 @@ See the [Roadmap](#roadmap) section and the [`docs/HANDOFF.md`](docs/HANDOFF.md)
 ak820pro-modder/
 ├── crates/
 │   ├── ak820-protocol/      Pure-Rust library — HID framing, command encoders/decoders
+│   ├── ak820-anime/         Procedural 128 × 128 anime cards for the TFT
 │   │   └── src/commands/    One module per feature family (lighting, keymap, macros, …)
 │   └── ak820-cli/           `ak820` headless binary (scripting + RE / smoke tests)
 ├── src-tauri/               Tauri 2 shell — async commands marshal between UI and protocol crate
@@ -280,4 +291,4 @@ Hardware control surfaces are inherently risky. Read [`SECURITY.md`](SECURITY.md
 
 ---
 
-<sub>v0.6.0-beta · made with ❤️ for the macOS mechanical-keyboard community · open issues / PRs at [github.com/wsclx/ak820pro-modder](https://github.com/wsclx/ak820pro-modder)</sub>
+<sub>v0.9.0-macos.1 · made with ❤️ for the macOS mechanical-keyboard community · fork: [github.com/adamauthor/ak820pro-modder](https://github.com/adamauthor/ak820pro-modder) · upstream: [github.com/wsclx/ak820pro-modder](https://github.com/wsclx/ak820pro-modder)</sub>

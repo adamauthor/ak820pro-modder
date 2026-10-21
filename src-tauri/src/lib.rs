@@ -23,10 +23,16 @@ mod mac_controls;
 use mac_controls::{
     mac_controls_action, mac_controls_refresh, mac_controls_save, mac_controls_status,
 };
+mod anime_screen;
 mod icloud_sync;
+mod json_store;
 mod now_playing;
 mod now_playing_tft;
+mod pomodoro;
 mod presets;
+mod settings_bundle;
+mod smart;
+mod smart_lighting;
 mod starter_library;
 mod tft_memory;
 mod tft_text;
@@ -34,6 +40,7 @@ use automations::{Automation, RunResult};
 use now_playing::NowPlaying;
 use now_playing_tft::NowPlayingTftState;
 use presets::Preset;
+use smart::Smart;
 use starter_library::StarterAutomation;
 use std::sync::Arc;
 use tft_memory::TftMemory;
@@ -101,15 +108,18 @@ fn refresh_automation_shortcuts(app: &AppHandle) -> Result<(), String> {
         if m.shortcut.trim().is_empty() {
             continue;
         }
+        // One bad entry must not stop the remaining shortcuts from working.
         if mac_controls::shortcut_reserved(app, &m.shortcut) {
-            return Err("This shortcut key is reserved for the knob".into());
+            tracing::warn!(shortcut = %m.shortcut, "Mac macro shortcut is reserved for the knob");
+            continue;
         }
-        let shortcut: Shortcut = m
-            .shortcut
-            .parse()
-            .map_err(|e| format!("Invalid Mac macro shortcut: {e}"))?;
+        let Ok(shortcut) = m.shortcut.parse::<Shortcut>() else {
+            tracing::warn!(shortcut = %m.shortcut, "invalid Mac macro shortcut");
+            continue;
+        };
         if mgr.is_registered(shortcut) {
-            return Err(format!("Shortcut already used: {}", m.shortcut));
+            tracing::warn!(shortcut = %m.shortcut, "Mac macro shortcut already in use");
+            continue;
         }
         mgr.on_shortcut(shortcut, move |_, _, event| {
             if event.state() == ShortcutState::Pressed {
@@ -248,28 +258,42 @@ async fn host_remaps_get() -> Result<Vec<host_keyboard::Remap>, String> {
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
-fn host_remaps_saved(app: AppHandle) -> Result<Vec<host_keyboard::Remap>, String> {
-    host_keyboard::saved_remaps(&app.path().app_data_dir().map_err(|e| e.to_string())?)
+fn host_remaps_saved(app: AppHandle) -> Vec<host_keyboard::Remap> {
+    mac_controls::config(&app)
+        .base_remaps
+        .into_iter()
+        .map(|r| host_keyboard::Remap {
+            source: r.source,
+            destination: r.destination,
+        })
+        .collect()
 }
+/// Saves the base Mac key mappings. The native controller applies them to
+/// every AK820 connection and reapplies them after each reconnect.
 #[tauri::command]
 async fn host_remaps_apply(
     app: AppHandle,
     remaps: Vec<host_keyboard::Remap>,
     restore: bool,
 ) -> Result<Vec<host_keyboard::Remap>, String> {
-    if !restore
-        && remaps.iter().any(|r| {
-            mac_controls::marker_reserved(&app, r.destination)
-                || mac_controls::marker_reserved(&app, r.source)
-        })
-    {
+    let remaps = if restore { Vec::new() } else { remaps };
+    host_keyboard::validate_remaps(&remaps)?;
+    if remaps.iter().any(|r| {
+        mac_controls::marker_reserved(&app, r.destination)
+            || mac_controls::marker_reserved(&app, r.source)
+    }) {
         return Err("F18–F20 are reserved for the knob while it is enabled".into());
     }
-    mac_controls::prepare_base_remaps(&app).await?;
-    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    tokio::task::spawn_blocking(move || host_keyboard::apply_remaps(&dir, remaps, restore))
-        .await
-        .map_err(|e| e.to_string())?
+    let mut config = mac_controls::config(&app);
+    config.base_remaps = remaps
+        .iter()
+        .map(|r| mac_controls::ProfileRemap {
+            source: r.source,
+            destination: r.destination,
+        })
+        .collect();
+    mac_controls::save(&app, config).await?;
+    Ok(remaps)
 }
 
 /// Holds a single open control connection across calls so we don't
@@ -872,6 +896,9 @@ async fn apply_preset(
                 })
                 .await?;
             report.lighting_applied = true;
+            if let Some(smart) = app.try_state::<Arc<Smart>>() {
+                smart.lighting.set_base(&cfg).await;
+            }
         }
     }
 
@@ -1006,6 +1033,7 @@ async fn force_reconnect(state: State<'_, Arc<ConnState>>) -> Result<(), AppErro
 async fn apply_lighting(
     state: State<'_, Arc<ConnState>>,
     memory: State<'_, Arc<TftMemory>>,
+    smart: State<'_, Arc<Smart>>,
     config: LightingConfig,
 ) -> Result<(), AppError> {
     // Stale-handle retry is now handled generically by `ConnState::with`.
@@ -1016,6 +1044,8 @@ async fn apply_lighting(
             Ok(())
         })
         .await?;
+    // Remember it as the user's own layer for the smart lighting engine.
+    smart.lighting.set_base(&config).await;
     // SET_LED_EFFECT is observed (and confirmed against the AJAZZ web
     // driver) to reset the TFT to its factory animation. Re-apply what
     // the user last asked the TFT to show.
@@ -1328,8 +1358,143 @@ async fn now_playing_tft_status(
     Ok(state.is_running().await)
 }
 
+/* ------------------------------------- smart lighting, Pomodoro, anime --
+ *
+ * Thin wrappers over `smart::Smart`, which owns the background tasks.
+ */
+
+#[tauri::command]
+async fn smart_status(smart: State<'_, Arc<Smart>>) -> Result<smart::SmartStatus, String> {
+    Ok(smart.smart_status().await)
+}
+#[tauri::command]
+async fn smart_save(
+    smart: State<'_, Arc<Smart>>,
+    config: smart_lighting::SmartConfig,
+) -> Result<(), String> {
+    smart.inner().save_smart(config).await
+}
+#[tauri::command]
+async fn lighting_base_get(smart: State<'_, Arc<Smart>>) -> Result<Option<LightingConfig>, String> {
+    Ok(smart.lighting.base().await)
+}
+#[tauri::command]
+async fn pomodoro_status(
+    smart: State<'_, Arc<Smart>>,
+) -> Result<(pomodoro::Snapshot, pomodoro::PomodoroConfig), String> {
+    Ok(smart.pomodoro_status().await)
+}
+#[tauri::command]
+async fn pomodoro_command(smart: State<'_, Arc<Smart>>, command: String) -> Result<(), String> {
+    smart.inner().pomodoro_command(&command).await
+}
+#[tauri::command]
+async fn pomodoro_save(
+    smart: State<'_, Arc<Smart>>,
+    config: pomodoro::PomodoroConfig,
+) -> Result<(), String> {
+    smart.save_pomodoro(config).await
+}
+#[tauri::command]
+async fn anime_config(smart: State<'_, Arc<Smart>>) -> Result<anime_screen::AnimeConfig, String> {
+    Ok(smart.anime_config().await)
+}
+#[tauri::command]
+async fn anime_save(
+    smart: State<'_, Arc<Smart>>,
+    config: anime_screen::AnimeConfig,
+) -> Result<(), String> {
+    smart.save_anime(config).await
+}
+#[tauri::command]
+fn anime_characters() -> Vec<(ak820_anime::Character, &'static str)> {
+    ak820_anime::characters()
+}
+#[tauri::command]
+async fn anime_preview(smart: State<'_, Arc<Smart>>, scene: String) -> Result<Vec<String>, String> {
+    smart.anime_preview(scene).await
+}
+#[tauri::command]
+async fn anime_upload(smart: State<'_, Arc<Smart>>, scene: String) -> Result<(), String> {
+    smart.anime_upload(&scene).await
+}
+#[tauri::command]
+async fn set_ui_language(smart: State<'_, Arc<Smart>>, language: String) -> Result<(), String> {
+    smart.inner().set_language(language).await;
+    Ok(())
+}
+
+/* ------------------------------------------------- settings import/export */
+
+async fn reload_settings(app: &AppHandle) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let config: mac_controls::Config = json_store::load(&dir, "mac-controls.json");
+    mac_controls::save(app, config).await?;
+    refresh_automation_shortcuts(app)?;
+    if let Some(smart) = app.try_state::<Arc<Smart>>() {
+        smart.inner().reload().await?;
+    }
+    Ok(())
+}
+#[tauri::command]
+async fn settings_export(app: AppHandle, path: String) -> Result<(), String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let bundle = settings_bundle::export(&dir, unix_millis())?;
+    let bytes = serde_json::to_vec_pretty(&bundle).map_err(|e| e.to_string())?;
+    std::fs::write(path, bytes).map_err(|e| e.to_string())
+}
+#[tauri::command]
+async fn settings_import(app: AppHandle, path: String) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bundle: settings_bundle::Bundle =
+        serde_json::from_slice(&bytes).map_err(|e| format!("Invalid settings file: {e}"))?;
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    settings_bundle::write(&dir, &bundle)?;
+    reload_settings(&app).await
+}
+#[tauri::command]
+async fn icloud_settings_push(app: AppHandle) -> Result<u64, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let bundle = settings_bundle::export(&dir, unix_millis())?;
+    let local = dir.join(settings_bundle::ICLOUD_NAME);
+    json_store::save(&dir, settings_bundle::ICLOUD_NAME, &bundle)?;
+    tokio::task::spawn_blocking(move || {
+        icloud_sync::push_named(&local, settings_bundle::ICLOUD_NAME)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:?}"))
+}
+#[tauri::command]
+async fn icloud_settings_pull(app: AppHandle) -> Result<Option<u64>, String> {
+    let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+    let local = dir.join(settings_bundle::ICLOUD_NAME);
+    let pulled = tokio::task::spawn_blocking({
+        let local = local.clone();
+        move || icloud_sync::pull_named_if_newer(&local, settings_bundle::ICLOUD_NAME)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| format!("{e:?}"))?;
+    if pulled.is_some() {
+        let bundle: settings_bundle::Bundle =
+            serde_json::from_slice(&std::fs::read(&local).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        settings_bundle::write(&dir, &bundle)?;
+        reload_settings(&app).await?;
+    }
+    Ok(pulled)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // With panic = "abort" nothing else runs after a panic. Put the knob and
+    // key mappings back first so the keyboard keeps working without Modder.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        mac_controls::emergency_restore();
+        default_hook(info);
+    }));
     #[cfg(target_os = "macos")]
     if !mac_controls::claim_instance() {
         return;
@@ -1423,6 +1588,22 @@ pub fn run() {
             now_playing_tft_start,
             now_playing_tft_stop,
             now_playing_tft_status,
+            smart_status,
+            smart_save,
+            lighting_base_get,
+            pomodoro_status,
+            pomodoro_command,
+            pomodoro_save,
+            anime_config,
+            anime_save,
+            anime_characters,
+            anime_preview,
+            anime_upload,
+            set_ui_language,
+            settings_export,
+            settings_import,
+            icloud_settings_push,
+            icloud_settings_pull,
         ])
         .setup(|app| {
             use tauri::Manager;
@@ -1526,8 +1707,16 @@ pub fn run() {
             // has a marker assigned. Done after the menu setup so the
             // plugin is fully initialised. Failure is logged but doesn't
             // block launch — the user can still adopt + re-bind.
+            let native_events = mac_controls::install_event_bridge();
             if let Err(error) = mac_controls::initialize(app.handle()) {
                 tracing::warn!(%error, "Mac controls startup needs attention");
+            }
+            match Smart::new(app.handle().clone(), app.state::<Arc<ConnState>>().inner().clone()) {
+                Ok(smart) => {
+                    smart.start(native_events);
+                    app.manage(smart);
+                }
+                Err(error) => tracing::warn!(%error, "smart services unavailable"),
             }
             if let Err(e) = refresh_automation_shortcuts(app.handle()) {
                 tracing::warn!("initial automation shortcut registration failed: {e}");

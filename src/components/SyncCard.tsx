@@ -106,6 +106,8 @@ export function SyncCard() {
     setInfo(null);
     try {
       const mtime = await invoke<number>("icloud_sync_push");
+      // The settings bundle carries everything else (knob, macros, lighting…).
+      await invoke("icloud_settings_push").catch(() => {});
       setInfo(`Pushed at ${new Date(mtime).toLocaleTimeString()}`);
       await refresh();
     } catch (e) {
@@ -121,6 +123,7 @@ export function SyncCard() {
     setInfo(null);
     try {
       const mtime = await invoke<number | null>("icloud_sync_pull");
+      await invoke("icloud_settings_pull").catch(() => {});
       if (mtime === null) {
         setInfo("Already up to date — local copy is at least as recent.");
       } else {

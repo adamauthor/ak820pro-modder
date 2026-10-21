@@ -49,6 +49,7 @@ mod mac_controls {
             "Mapping.swift",
             "Player.swift",
             "MusicAutomation.swift",
+            "Host.swift",
             "Bridge.swift",
         ] {
             let file = directory.join("native/mac-controls").join(name);
@@ -72,7 +73,9 @@ mod mac_controls {
             "ApplicationServices",
             "Carbon",
             "CoreAudio",
+            "CoreBluetooth",
             "Foundation",
+            "UserNotifications",
         ] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }

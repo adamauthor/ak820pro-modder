@@ -62,12 +62,12 @@ struct NativeMusicClient {
         try send(OSType(kAECoreSuite), OSType(kAEGetData), object: musicProperty(code, container: container))
     }
     func isPlaying() throws -> Bool { try property("pPlS").enumCodeValue == fourCC("kPSP") }
-    func perform(_ action: String) throws {
+    func perform(_ action: String, seconds: Double = 5) throws {
         if action == "seek_forward" || action == "seek_backward" {
             let position = try property("pPos").doubleValue
             let duration = try property("pDur", container: musicProperty("pTrk")).doubleValue
             guard position.isFinite, duration.isFinite, position >= 0, duration > 0 else { throw MusicError.failed("Start a track in the selected player first") }
-            let desired = min(duration, max(0, position + (action == "seek_forward" ? 5 : -5)))
+            let desired = min(duration, max(0, position + (action == "seek_forward" ? seconds : -seconds)))
             _ = try send(OSType(kAECoreSuite), OSType(kAESetData), object: musicProperty("pPos"), data: NSAppleEventDescriptor(double: desired))
             return
         }

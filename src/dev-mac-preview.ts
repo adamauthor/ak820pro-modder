@@ -34,6 +34,7 @@ const snapshot: MacStatus = {
     click_interval_ms: 300,
     bindings: { ...DEFAULT_BINDINGS },
     profiles: [],
+    base_remaps: [],
   },
 };
 let previewUntil = 0;

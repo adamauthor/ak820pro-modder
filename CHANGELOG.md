@@ -4,6 +4,62 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [0.9.0-macos.1] — Smart lighting, Pomodoro and anime screen
+
+### Added
+- **Smart lighting** with layered priorities (Teams call → Pomodoro → app rule →
+  your own lighting): Microsoft Teams calls light the keyboard (detected from
+  the Teams process using the microphone, macOS 14.2+), new Telegram messages
+  flash blue (Dock badge via Accessibility), optional lighting per app.
+- **Pomodoro** timer: red focus lighting that dims as time runs out and breathes
+  in the last minute, red flashes and notifications at phase changes, short and
+  long breaks, menu-bar countdown, bindable to a knob click.
+- **Anime screen**: procedurally drawn chibi characters (Sakura, Yuki, Kuro,
+  Hikari) for greeting, weather (Open-Meteo) and now-playing cards (with cover
+  art), optional animation, preview in the app, manual or rate-limited
+  automatic upload. New `ak820-anime` crate and `ak820 anime` CLI command.
+- **Menu bar**: battery level, active profile, Pomodoro countdown and quick
+  switches for the knob mode, lighting presets, smart lighting, Pomodoro and
+  anime cards. Low-battery notifications at 20% and 10% (USB feature report or
+  the Bluetooth Battery Service).
+- Knob click actions **Mute sound**, **Mute microphone** and **Pomodoro**
+  (available, never selected by default).
+- Settings backup: export/import every setting as one JSON file; iCloud sync
+  now carries the whole settings bundle, not only automations.
+- `ak820 battery` CLI command.
+
+### Changed
+- Knob volume uses the system volume keys, so macOS shows its volume indicator,
+  uses its own step and unmutes; Core Audio remains the fallback.
+- Mac key mappings are a base layer applied by the native controller: they now
+  come back automatically after reconnecting, sleep or restart, on USB and
+  Bluetooth alike. Old per-connection backups are migrated once.
+- Mapping refreshes run off the main thread and only rewrite recovery records
+  when they change (previously two file writes every 10 seconds).
+- Fast knob turns while seeking are combined into one jump instead of being
+  dropped; a recently found seek control is reused for 3 seconds.
+
+### Fixed
+- A crash no longer leaves the knob mapped to F18–F20: a panic hook restores
+  the original mappings first.
+- An unexpected single-instance lock error no longer makes the app exit silently.
+- Recording Mac macros with ⌘ no longer loses repeated keys (WebKit omits key-up
+  events while ⌘ is held).
+- One invalid macro shortcut no longer stops the others from registering; an
+  unrecorded macro can be saved as a draft.
+- Key remapping view warns about unsaved changes and asks before discarding them.
+- Mapping records written by a newer Modder are refused instead of being
+  misread.
+
+### Development
+- CI runs on every branch and pull request and checks that the Swift self-test
+  actually ran.
+
+## [0.8.0-macos.2] — Knob gestures, app profiles and music services
+
+- Single, double and triple knob clicks, Shift+turn, per-app profiles with their
+  own key mappings, Spotify and Apple Music control, Russian interface.
+
 ## [0.7.0-macos.2] — Background controls and YouTube window recovery
 
 - Run as a menu-bar application without a Dock icon. Both the close button and

@@ -41,6 +41,27 @@ enum Cmd {
     },
     /// Report the detected protocol's supported capabilities.
     Capabilities,
+    /// Read the battery level (feature-report firmware over USB).
+    Battery,
+    /// Render an anime card for the TFT; save PNG frames and/or upload it.
+    Anime {
+        /// daily | pomodoro
+        #[arg(long, default_value = "daily", value_parser = ["daily", "pomodoro"])]
+        scene: String,
+        /// sakura | yuki | kuro | hikari
+        #[arg(long, default_value = "sakura")]
+        character: String,
+        #[arg(long)]
+        animated: bool,
+        /// Directory for frame-NN.png files.
+        #[arg(long)]
+        out: Option<std::path::PathBuf>,
+        /// Upload to the keyboard (replaces the stored animation on FF13).
+        #[arg(long)]
+        upload: bool,
+        #[arg(long)]
+        allow_legacy: bool,
+    },
     /// Lighting control
     #[command(subcommand)]
     Lighting(LightingCmd),
@@ -222,6 +243,26 @@ fn main() -> Result<()> {
             );
             Ok(())
         }
+        Cmd::Battery => {
+            let battery = ak820_protocol::Connection::open_control()?.get_legacy_battery()?;
+            println!("{}", serde_json::to_string_pretty(&battery)?);
+            Ok(())
+        }
+        Cmd::Anime {
+            scene,
+            character,
+            animated,
+            out,
+            upload,
+            allow_legacy,
+        } => cmd_anime(
+            &scene,
+            &character,
+            animated,
+            out.as_deref(),
+            upload,
+            allow_legacy,
+        ),
         Cmd::Clock { dry_run } => {
             let now = ak820_protocol::legacy::local_now()?;
             let packet = ak820_protocol::legacy::clock_packet(now)?;
@@ -290,6 +331,58 @@ fn main() -> Result<()> {
             dry_run,
         ),
     }
+}
+
+fn cmd_anime(
+    scene: &str,
+    character: &str,
+    animated: bool,
+    out: Option<&std::path::Path>,
+    upload: bool,
+    allow_legacy: bool,
+) -> Result<()> {
+    let character: ak820_anime::Character =
+        serde_json::from_value(serde_json::json!(character)).context("unknown character")?;
+    let now = ak820_protocol::legacy::local_now()?;
+    let scene = match scene {
+        "pomodoro" => ak820_anime::Scene::Pomodoro {
+            phase: "focus".into(),
+            minutes: 25,
+            round: 0,
+        },
+        _ => ak820_anime::Scene::Daily {
+            year: now.year(),
+            month: now.month() as u8,
+            day: now.day(),
+            weekday: now.weekday().number_days_from_monday(),
+            hour: now.hour(),
+        },
+    };
+    let frames = ak820_anime::render(&scene, &character, animated);
+    if let Some(dir) = out {
+        std::fs::create_dir_all(dir)?;
+        for (i, frame) in frames.iter().enumerate() {
+            std::fs::write(
+                dir.join(format!("frame-{i:02}.png")),
+                ak820_anime::to_png(frame),
+            )?;
+        }
+    }
+    if upload {
+        let anim = TftAnimation {
+            frames: frames
+                .iter()
+                .map(|f| TftFrame::from_rgb888(&f.rgb, f.delay_ms))
+                .collect::<std::result::Result<_, _>>()?,
+        };
+        ak820_protocol::Connection::open_tft()?
+            .upload_tft_animation_confirmed(&anim, allow_legacy)?;
+    }
+    println!(
+        "{}",
+        serde_json::json!({ "frames": frames.len(), "uploaded": upload })
+    );
+    Ok(())
 }
 
 fn cmd_list(json: bool) -> Result<()> {

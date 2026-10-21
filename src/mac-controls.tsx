@@ -1,6 +1,14 @@
 import { createContext, useContext } from "react";
 import { invoke } from "@tauri-apps/api/core";
-export type ClickAction = "toggle" | "next" | "previous" | "open" | "none";
+export type ClickAction =
+  | "toggle"
+  | "next"
+  | "previous"
+  | "open"
+  | "mute"
+  | "mic_mute"
+  | "pomodoro"
+  | "none";
 export type TurnAction =
   | "volume"
   | "seek"
@@ -40,6 +48,7 @@ export interface MacConfig {
   click_interval_ms: number;
   bindings: GestureBindings;
   profiles: AppProfile[];
+  base_remaps: { source: number; destination: number }[];
 }
 export interface MacStatus {
   supported: boolean;

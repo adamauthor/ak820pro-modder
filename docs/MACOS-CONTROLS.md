@@ -1,6 +1,6 @@
 # Unified Mac controls
 
-The `0.8.0-macos.2` fork combines the FF13 USB fixes, TFT uploads, keyboard
+The `0.9.0-macos.1` fork combines the FF13 USB fixes, TFT uploads, keyboard
 macros, Mac key remapping and the music knob in **AK820 Pro Modder.app**.
 The music code is a Swift static library linked into the Tauri executable.
 There is no separate helper application or helper Accessibility permission.
@@ -49,8 +49,12 @@ only slot 1 has physical evidence. Unknown devices and ambiguous duplicate
 services are left unchanged. A ten-second timer reapplies the knob rule after
 reconnection while the app runs.
 
-Mac key mappings use separate USB/Bluetooth backup files. Load the saved draft
-and reapply after reconnection; automatic reconnection applies to the knob and active application-profile overrides. Macro shortcuts run while the app is open, including with its
+Mac key mappings are saved once in `mac-controls.json` (`base_remaps`) and
+applied by the native controller as the lowest layer under app profiles, on
+USB and Bluetooth. The ten-second refresh reapplies them after reconnection,
+sleep or restart, together with the knob rule. Builds before 0.9 kept
+per-connection backup files; their applied rows are migrated once and the
+files are renamed to `*.json.migrated`. Macro shortcuts run while the app is open, including with its
 window hidden. USB is still required for lighting, clock, sleep and TFT
 configuration. Bluetooth discovery does not enable guessed wireless vendor
 commands. FF13 feature limits in [MACOS-800A.md](MACOS-800A.md) remain in force.
@@ -192,3 +196,23 @@ cannot launch it. YouTube Music's WebKit seek control is an `AXProgressIndicator
 and its spoken elapsed/total description is parsed explicitly (English/Russian).
 Native Music/Spotify event codes are taken from their shipped scripting
 interfaces; Spotify 1.3.5.3058 was inspected without installation or execution.
+
+
+## Knob actions
+
+Click actions: play/pause, next, previous, open the player, **mute sound**,
+**mute microphone**, **Pomodoro start/pause**, or nothing. Mute actions are
+never chosen by default. Volume turns post the system volume keys, so macOS
+shows its indicator and unmutes when the level changes; without Accessibility
+the volume falls back to Core Audio.
+
+## Robustness
+
+- Mapping refreshes run on a background queue; AppKit never waits for
+  `hidutil`. Recovery records are rewritten only when they change.
+- A panic hook restores the original knob and key mappings before the process
+  aborts, so a crash cannot leave the knob on F18–F20.
+- Recovery records from a newer Modder (version > 2) are refused unchanged.
+
+See [SMART-FEATURES.md](SMART-FEATURES.md) for smart lighting, Pomodoro, the
+menu bar and the anime screen.

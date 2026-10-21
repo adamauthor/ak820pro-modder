@@ -18,8 +18,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ak820-anime"
+version = "0.9.0-macos.1"
+dependencies = [
+ "embedded-graphics",
+ "image",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "ak820-audio-reactive"
-version = "0.8.0-macos.2"
+version = "0.9.0-macos.1"
 dependencies = [
  "realfft",
  "screencapturekit",
@@ -29,8 +39,9 @@ dependencies = [
 
 [[package]]
 name = "ak820-cli"
-version = "0.8.0-macos.2"
+version = "0.9.0-macos.1"
 dependencies = [
+ "ak820-anime",
  "ak820-audio-reactive",
  "ak820-protocol",
  "anyhow",
@@ -43,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "ak820-protocol"
-version = "0.8.0-macos.2"
+version = "0.9.0-macos.1"
 dependencies = [
  "fs2",
  "hex",
@@ -58,12 +69,14 @@ dependencies = [
 
 [[package]]
 name = "ak820pro-app"
-version = "0.8.0-macos.2"
+version = "0.9.0-macos.1"
 dependencies = [
+ "ak820-anime",
  "ak820-audio-reactive",
  "ak820-protocol",
  "anyhow",
  "embedded-graphics",
+ "image",
  "serde",
  "serde_json",
  "tauri",
@@ -72,6 +85,7 @@ dependencies = [
  "tauri-plugin-global-shortcut",
  "tauri-plugin-shell",
  "thiserror 2.0.18",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",

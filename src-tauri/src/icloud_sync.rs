@@ -122,16 +122,23 @@ fn push_automations_into(
     icloud_root: &std::path::Path,
     local_path: &std::path::Path,
 ) -> Result<u64, AppError> {
+    push_named_into(icloud_root, local_path, AUTOMATIONS_FILENAME)
+}
+fn push_named_into(
+    icloud_root: &std::path::Path,
+    local_path: &std::path::Path,
+    name: &str,
+) -> Result<u64, AppError> {
     if !local_path.exists() {
         return Err(AppError::Protocol(format!(
-            "local automations.json missing at {}",
+            "local {name} missing at {}",
             local_path.display()
         )));
     }
     let dir = icloud_root.join(SYNC_SUBDIR);
     std::fs::create_dir_all(&dir)
         .map_err(|e| AppError::Protocol(format!("create_dir({}): {e}", dir.display())))?;
-    let dest = dir.join(AUTOMATIONS_FILENAME);
+    let dest = dir.join(name);
     std::fs::copy(local_path, &dest)
         .map_err(|e| AppError::Protocol(format!("copy local → iCloud: {e}")))?;
     mtime_ms(&dest)
@@ -154,7 +161,14 @@ fn pull_automations_if_newer_from(
     icloud_root: &std::path::Path,
     local_path: &std::path::Path,
 ) -> Result<Option<u64>, AppError> {
-    let remote = icloud_root.join(SYNC_SUBDIR).join(AUTOMATIONS_FILENAME);
+    pull_named_if_newer_from(icloud_root, local_path, AUTOMATIONS_FILENAME)
+}
+fn pull_named_if_newer_from(
+    icloud_root: &std::path::Path,
+    local_path: &std::path::Path,
+    name: &str,
+) -> Result<Option<u64>, AppError> {
+    let remote = icloud_root.join(SYNC_SUBDIR).join(name);
     if !remote.exists() {
         return Ok(None);
     }
@@ -182,6 +196,22 @@ pub fn pull_automations_if_newer(local_path: &std::path::Path) -> Result<Option<
     let root = detect_icloud_root()
         .ok_or_else(|| AppError::Protocol("iCloud Drive not detected on this machine".into()))?;
     pull_automations_if_newer_from(&root, local_path)
+}
+
+/// Push any file of the sync folder by name (used for the settings bundle).
+pub fn push_named(local_path: &std::path::Path, name: &str) -> Result<u64, AppError> {
+    let root = detect_icloud_root()
+        .ok_or_else(|| AppError::Protocol("iCloud Drive not detected on this machine".into()))?;
+    push_named_into(&root, local_path, name)
+}
+/// Pull a named file only when the iCloud copy is newer.
+pub fn pull_named_if_newer(
+    local_path: &std::path::Path,
+    name: &str,
+) -> Result<Option<u64>, AppError> {
+    let root = detect_icloud_root()
+        .ok_or_else(|| AppError::Protocol("iCloud Drive not detected on this machine".into()))?;
+    pull_named_if_newer_from(&root, local_path, name)
 }
 
 #[cfg(test)]
