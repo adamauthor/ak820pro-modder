@@ -131,6 +131,10 @@ pub fn initialize(app: &AppHandle) -> Result<(), String> {
 pub fn shutdown() {
     let _ = native::request(json!({"operation":"shutdown"}));
 }
+#[cfg(target_os = "macos")]
+pub fn claim_instance() -> bool {
+    native::claim_instance(!std::env::args().any(|arg| arg == "--background"))
+}
 pub fn marker_reserved(app: &AppHandle, usage: u16) -> bool {
     app.state::<State>()
         .config
@@ -336,10 +340,14 @@ mod native {
     use super::*;
     use std::ffi::{c_char, c_void, CStr, CString};
     extern "C" {
+        fn ak820_mac_claim_instance(show_window: i32) -> i32;
         fn ak820_mac_controls_request(input: *const c_char) -> *mut c_char;
         fn ak820_mac_controls_free(pointer: *mut c_void);
         #[cfg(test)]
         pub(super) fn ak820_mac_controls_selftest() -> i32;
+    }
+    pub fn claim_instance(show_window: bool) -> bool {
+        unsafe { ak820_mac_claim_instance(i32::from(show_window)) == 1 }
     }
     pub fn request(value: Value) -> Result<Value, String> {
         let input = CString::new(value.to_string()).map_err(|e| e.to_string())?;

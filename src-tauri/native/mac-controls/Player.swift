@@ -143,7 +143,7 @@ func mediaSurface(_ root: AXUIElement, service: String) -> MediaSurface? {
     }
     return MediaSurface(root: root, toggle: button, playing: pauseNames.contains(axName(button).lowercased()), next: transport(nextNames, ".trailingTransportControl"), previous: transport(previousNames, ".leadingTransportControl"))
 }
-func seekSurface(_ surface: MediaSurface, by delta: Double) throws {
+func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID: pid_t) throws {
     guard let slider = axFind(surface.root, limit: 200, seconds: 1, where: { element in
         let name = axName(element).lowercased(), id = (axAttribute(element, kAXIdentifierAttribute) as? String ?? "").lowercased()
         return [kAXSliderRole, kAXProgressIndicatorRole].contains(axRole(element)) && ["progress", "seek", "playback", "elapsed", "position", "воспроизведения", "позиция"].contains(where: { name.contains($0) || id.contains($0) })
@@ -155,7 +155,40 @@ func seekSurface(_ surface: MediaSurface, by delta: Double) throws {
     // Never interpret a percentage as seconds without a confirmed elapsed time.
     guard let step = timelineStep(value: value, maximum: maximum,
         description: axAttribute(slider, kAXValueDescriptionAttribute) as? String, delta: delta) else { throw MusicError.failed("Cannot determine the seek timeline units for this player") }
-    guard AXUIElementSetAttributeValue(slider, kAXValueAttribute as CFString, NSNumber(value: min(maximum, max(0, value + step)))) == .success else { throw MusicError.failed("The player did not accept seeking") }
+    let target = min(maximum, max(0, value + step)), tolerance = abs(step / delta) * 0.55
+    func position() -> Double { (axAttribute(slider, kAXValueAttribute) as? NSNumber)?.doubleValue ?? value }
+    func confirmed() -> Bool { abs(position() - target) <= tolerance }
+    if confirmed() { return }
+    if AXUIElementSetAttributeValue(slider, kAXValueAttribute as CFString, NSNumber(value: target)) == .success {
+        Thread.sleep(forTimeInterval: 0.08)
+        if confirmed() { return }
+    }
+    // Safari reports this HTML range as a settable progress indicator, but its
+    // AX setter can succeed without changing playback. Focus only that range
+    // and address arrow events to the verified player process, never globally.
+    let application = AXUIElementCreateApplication(applicationPID)
+    let previousFocus = axAttribute(application, kAXFocusedUIElementAttribute)
+    guard AXUIElementSetAttributeValue(slider, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
+          let focused = axAttribute(application, kAXFocusedUIElementAttribute), CFEqual(focused, slider),
+          let source = CGEventSource(stateID: .privateState) else { throw MusicError.failed("The player did not accept seeking") }
+    defer {
+        if let previousFocus, CFGetTypeID(previousFocus) == AXUIElementGetTypeID(),
+           let current = axAttribute(application, kAXFocusedUIElementAttribute), CFEqual(current, slider) {
+            _ = AXUIElementSetAttributeValue(unsafeBitCast(previousFocus, to: AXUIElement.self), kAXFocusedAttribute as CFString, kCFBooleanTrue)
+        }
+    }
+    for _ in 0..<10 {
+        if confirmed() { return }
+        guard let focused = axAttribute(application, kAXFocusedUIElementAttribute), CFEqual(focused, slider) else { break }
+        let before = position(), key: CGKeyCode = target > before ? 124 : 123
+        guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { break }
+        down.flags = []; up.flags = []
+        down.postToPid(applicationPID); up.postToPid(applicationPID)
+        Thread.sleep(forTimeInterval: 0.07)
+        if abs(position() - before) < tolerance / 2 { break }
+    }
+    guard confirmed() else { throw MusicError.failed("The player did not confirm seeking") }
 }
 func serviceBundle(_ service: String, youtube: String) -> String {
     service == "spotify" ? "com.spotify.client" : service == "apple_music" ? "com.apple.Music" : youtube
@@ -248,7 +281,8 @@ final class MusicController {
                     case "previous": guard let button = surface.previous else { throw MusicError.failed("Previous track is unavailable in this player") }; try pressAX(button)
                     case "seek_forward", "seek_backward":
                         if nativeMusicBundle(route) != nil { throw MusicError.failed("Allow player control in Music settings") }
-                        try seekSurface(surface, by: action == "seek_forward" ? 5 : -5)
+                        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else { throw MusicError.failed("The music app closed before seeking") }
+                        try seekSurface(surface, by: action == "seek_forward" ? 5 : -5, applicationPID: app.processIdentifier)
                     default: throw MusicError.failed("Unknown music action")
                     }
                     lastRoute = route

@@ -7,6 +7,7 @@ export const russian: Record<string, string> = {
   "Allow player control in System Settings → Privacy & Security → Automation":
     "Разрешите управление плеером: Системные настройки → Конфиденциальность и безопасность → Автоматизация",
 
+  "Mac mappings are busy; retry in a moment": "Назначения обновляются. Повторите действие через секунду",
   Ready: "Готово",
   "Ready — USB and Bluetooth": "Готово — USB и Bluetooth",
   "Waiting for AK820 over USB or Bluetooth":

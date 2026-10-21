@@ -41,7 +41,7 @@ YouTube Music reopening were confirmed by the user.
 
 ## Pending before promotion
 
-1. Finish the latest preview's Accessibility refresh after unlocking the Mac.
+1. Finish the rebuilt app's Accessibility identity refresh when macOS requests Touch ID.
 2. Confirm physical rotation/Shift rotation against a YouTube Music queue, plus
    its spoken seek timeline. Unsupported timelines must report an error rather
    than guessing seconds from percentages.
@@ -57,3 +57,27 @@ YouTube Music reopening were confirmed by the user.
 
 No new keyboard firmware command, USB packet format or Bluetooth vendor write
 is introduced by this update. These tests do not imply new wireless TFT support.
+
+## 0.8.0-macos.2 recovery
+
+A live process sample confirmed a main-thread self-deadlock: the workspace
+activation observer was waiting for a `hidutil` process, Foundation delivered
+a timer inside that wait, and the timer tried to acquire the mapping lock
+already held by the outer transaction. The executable remaining alive was
+not evidence of a healthy window or working controls.
+
+The fix uses nonblocking close-on-exec file leases, coalesces reentrant
+mapping refreshes, and prevents a second app process from claiming controls.
+A separate non-UI native process also confirmed that the running app rejects
+a second instance lease (`second_instance_claim=0`). Native regression
+fixtures check that a second lease immediately reports busy,
+that its descriptor cannot leak through exec, and that release allows a new
+lease. All 80 workspace tests pass, with one hardware-only test ignored;
+Clippy with warnings denied and the production Tauri build also pass.
+
+The installed recovery build opens and responds to UI navigation after timer
+and application-activation events. Only the Applications copy is retained as
+an executable app; release/rollback artifacts are ZIP archives. The temporary
+QA browser profile (including Caps Lock → Escape) was removed from the user's
+configuration. Physical playback verification follows the rebuilt app's
+macOS Accessibility identity refresh.

@@ -24,6 +24,9 @@ final class NativeControls: NSObject {
     var statusItem: NSStatusItem?
     var backgroundActivity: NSObjectProtocol?
     var applicationObserver: NSObjectProtocol?
+    var instanceObserver: NSObjectProtocol?
+    var refreshingMappings = false
+    var refreshMappingsAgain = false
     var activeBundle: String?
     var activeProfile: AppProfile?
     var pendingClick: DispatchWorkItem?
@@ -74,6 +77,9 @@ final class NativeControls: NSObject {
             applicationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
                 do { try self?.refreshContext() } catch { if String(describing: error) != "Release held keys to switch profile mappings" { self?.lastError = String(describing: error) } }
             }
+        }
+        if instanceObserver == nil {
+            instanceObserver = DistributedNotificationCenter.default().addObserver(forName: showSettingsNotification, object: nil, queue: .main) { [weak self] _ in self?.openWindow() }
         }
         if timer == nil {
             let timer = Timer(timeInterval: 10, repeats: true) { [weak self] _ in
@@ -131,6 +137,17 @@ final class NativeControls: NSObject {
         else if message == "Ready" || message.hasPrefix("Waiting") || message.hasPrefix("Previous") { message = "Ready — USB and Bluetooth" }
     }
     func refreshContext(force: Bool = false) throws {
+        // waitUntilExit may deliver another activation/timer notification while
+        // the current mapping transaction owns its file lock. Coalesce it.
+        guard !refreshingMappings else { refreshMappingsAgain = true; return }
+        refreshingMappings = true
+        defer {
+            refreshingMappings = false
+            if refreshMappingsAgain {
+                refreshMappingsAgain = false
+                DispatchQueue.main.async { [weak self] in do { try self?.refreshContext(force: true) } catch { self?.lastError = String(describing: error) } }
+            }
+        }
         let bundle = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
         let profile = advanced ? config?.profile(for: bundle) : nil
         guard force || bundle != activeBundle || profile != activeProfile else { return }
@@ -199,6 +216,7 @@ final class NativeControls: NSObject {
     func shutdown() throws {
         controller.cancel(); cancelClicks(); pendingProfile?.cancel(); pendingProfile = nil; timer?.invalidate(); timer = nil
         if let applicationObserver { NSWorkspace.shared.notificationCenter.removeObserver(applicationObserver) }; applicationObserver = nil
+        if let instanceObserver { DistributedNotificationCenter.default().removeObserver(instanceObserver) }; instanceObserver = nil
         if let backgroundActivity { ProcessInfo.processInfo.endActivity(backgroundActivity) }; backgroundActivity = nil
         defer { unregisterHotkeys() }
         if let directory { _ = try updateKnobMappings(target: nil, directory: directory) }
@@ -313,6 +331,20 @@ public func ak820MacControlsSelftest() -> Int32 {
               nativeMusicBundle("apple_music") == "com.apple.Music",
               nativeMusicBundle("youtube_music") == nil,
               nativeMusicBundle("arbitrary.bundle") == nil else { return 22 }
+        let lockDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("ak820-lock-test-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: lockDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: lockDirectory) }
+        let lockFile = lockDirectory.appendingPathComponent("test.lock")
+        do {
+            let lease = try NativeFileLock(lockFile)
+            try withExtendedLifetime(lease) {
+                guard fcntl(lease.descriptor, F_GETFD) & FD_CLOEXEC != 0 else { throw MusicError.failed("Lock leaks into child processes") }
+                do { _ = try NativeFileLock(lockFile); throw MusicError.failed("Reentrant lock was accepted") }
+                catch NativeLockError.busy { }
+            }
+        }
+        let released = try NativeFileLock(lockFile)
+        withExtendedLifetime(released) { }
         return 0
     } catch { return 6 }
 }

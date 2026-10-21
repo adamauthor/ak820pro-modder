@@ -45,6 +45,7 @@ mod mac_controls {
             "ControlModel.swift",
             "Actions.swift",
             "Discovery.swift",
+            "Runtime.swift",
             "Mapping.swift",
             "Player.swift",
             "MusicAutomation.swift",

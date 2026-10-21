@@ -125,11 +125,15 @@ let usbKeys = KeyboardProfile(id: "usb-keys", matching: ["VendorID": 3141, "Prod
 
 func updateControlMappings(target: UInt64?, rotation: Bool, remaps: [ProfileRemap], directory: URL) throws -> [ConnectedKeyboard] {
     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-    let descriptor = Darwin.open(directory.appendingPathComponent("native-map.lock").path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-    guard descriptor >= 0 else { throw MusicError.failed("Cannot open Mac mapping lock") }
-    defer { Darwin.close(descriptor) }
-    guard flock(descriptor, LOCK_EX) == 0 else { throw MusicError.failed("Cannot lock Mac mappings") }
-    defer { flock(descriptor, LOCK_UN) }
+    let lease: NativeFileLock
+    do { lease = try NativeFileLock(directory.appendingPathComponent("native-map.lock")) }
+    catch NativeLockError.busy { throw MusicError.failed("Mac mappings are busy; retry in a moment") }
+    catch { throw MusicError.failed("Cannot lock Mac mappings") }
+    return try withExtendedLifetime(lease) {
+        try updateLockedMappings(target: target, rotation: rotation, remaps: remaps, directory: directory)
+    }
+}
+private func updateLockedMappings(target: UInt64?, rotation: Bool, remaps: [ProfileRemap], directory: URL) throws -> [ConnectedKeyboard] {
     let ownershipFile = directory.appendingPathComponent("knob-ownership.json")
     var document = FileManager.default.fileExists(atPath: ownershipFile.path) ? try decodeOwnership(Data(contentsOf: ownershipFile)) : MappingOwnership()
     let listing = try runHidutil(["list", "--ndjson", "--matching", "{\"VendorID\":3141}"])

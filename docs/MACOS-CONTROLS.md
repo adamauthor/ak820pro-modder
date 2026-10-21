@@ -1,6 +1,6 @@
 # Unified Mac controls
 
-The `0.8.0-macos.1` fork combines the FF13 USB fixes, TFT uploads, keyboard
+The `0.8.0-macos.2` fork combines the FF13 USB fixes, TFT uploads, keyboard
 macros, Mac key remapping and the music knob in **AK820 Pro Modder.app**.
 The music code is a Swift static library linked into the Tauri executable.
 There is no separate helper application or helper Accessibility permission.
@@ -56,6 +56,17 @@ configuration. Bluetooth discovery does not enable guessed wireless vendor
 commands. FF13 feature limits in [MACOS-800A.md](MACOS-800A.md) remain in force.
 
 ## Ownership and lifecycle
+
+The application takes a per-user, nonblocking instance lease before creating a
+window or registering controls. Opening a second copy requests the existing
+settings window; a duplicate background/login launch exits quietly. Lock file
+descriptors are close-on-exec so `hidutil` children cannot retain these leases.
+
+Mapping transactions also take nonblocking leases. Activation notifications
+and timer callbacks are coalesced while a refresh is in progress. This matters
+because Foundation's process wait can run a nested AppKit loop: waiting on a
+second lock in that callback would deadlock the window and every knob action.
+
 
 - The knob owns Consumer Mute `0C:E2` and optionally Volume Up/Down; each source has a separate original destination.
 - Keyboard remapping owns keyboard-page rows. On Bluetooth it preserves the
