@@ -23,6 +23,7 @@ interface AppLighting { bundle_id: string; name: string; lighting: Lighting }
 interface SmartConfig {
   teams_enabled: boolean;
   teams_lighting: Lighting;
+  teams_ring_lighting: Lighting;
   telegram_enabled: boolean;
   telegram_color: string;
   telegram_flashes: number;
@@ -152,15 +153,17 @@ export function Smart() {
       <Button variant="primary" disabled={busy} onClick={() => void run("smart_save", { config: smart }, t("Saved.", "Сохранено."))}>{t("Save", "Сохранить")}</Button>}>
       <div className="space-y-5">
         <div className="space-y-2">
-          <Toggle checked={smart.teams_enabled} onChange={v => setSmart({ ...smart, teams_enabled: v })}>{t("Microsoft Teams call", "Звонок в Microsoft Teams")}</Toggle>
+          <Toggle checked={smart.teams_enabled} onChange={v => setSmart({ ...smart, teams_enabled: v })}>{t("Microsoft Teams calls: incoming and in progress", "Звонки Microsoft Teams: входящий и разговор")}</Toggle>
           <div className="flex flex-wrap items-center gap-3 pl-11 text-sm text-fg-2">
-            <ColorInput label={t("Teams colour", "Цвет Teams")} value={smart.teams_lighting.color} onChange={c => setSmart({ ...smart, teams_lighting: { ...smart.teams_lighting, color: c } })} />
+            <ColorInput label={t("Teams colour", "Цвет Teams")} value={smart.teams_lighting.color} onChange={c => setSmart({ ...smart, teams_lighting: { ...smart.teams_lighting, color: c }, teams_ring_lighting: { ...smart.teams_ring_lighting, color: c } })} />
             <select aria-label={t("Teams effect", "Эффект Teams")} className={INPUT} value={smart.teams_lighting.mode}
               onChange={e => setSmart({ ...smart, teams_lighting: lighting(smart.teams_lighting.color, e.target.value, smart.teams_lighting.brightness) })}>
               <option value="breath">{t("Breathing", "Дыхание")}</option>
               <option value="static">{t("Steady", "Постоянно")}</option>
             </select>
-            <span>{t("While Teams uses the microphone. Needs macOS 14.2+.", "Пока Teams использует микрофон. Нужна macOS 14.2+.")}</span>
+            <span>{t("An incoming call pulses fast; during the call the keyboard breathes in this colour (Teams using the microphone, macOS 14.2+).",
+              "Входящий звонок — быстрая пульсация, во время разговора клавиатура «дышит» этим цветом (Teams использует микрофон, macOS 14.2+).")}</span>
+            <Button size="sm" disabled={busy || !usb} onClick={() => void run("smart_test", { kind: "teams_ring" }, t("Showed the ringing pulse for 6 seconds.", "Пульсация входящего показана на 6 секунд."))}>{t("Test ringing", "Проверить входящий")}</Button>
             <Button size="sm" disabled={busy || !usb} onClick={() => void run("smart_test", { kind: "teams" }, t("Showed the call colour for 6 seconds.", "Цвет звонка показан на 6 секунд."))}>{t("Test", "Проверить")}</Button>
           </div>
         </div>
@@ -170,8 +173,8 @@ export function Smart() {
             <ColorInput label={t("Telegram colour", "Цвет Telegram")} value={smart.telegram_color} onChange={c => setSmart({ ...smart, telegram_color: c })} />
             <NumberInput label={t("Flashes", "Вспышек")} min={1} max={10} value={smart.telegram_flashes} onChange={v => setSmart({ ...smart, telegram_flashes: v })} />
             <Button size="sm" disabled={busy || !usb} onClick={() => void run("smart_test", { kind: "telegram" }, t("Flashed.", "Мигнуло."))}>{t("Test", "Проверить")}</Button>
-            <span>{t("Telegram must be running on this Mac: Modder watches the unread counter on its Dock icon and flashes when it grows. Messages you read on the phone first, and muted chats, do not raise it.",
-              "Telegram должен быть запущен на этом Mac: Modder следит за счётчиком непрочитанных на его иконке в Dock и мигает, когда он растёт. Сообщения, прочитанные сначала на телефоне, и заглушённые чаты счётчик не меняют.")}</span>
+            <span>{t("Telegram must be running on this Mac. Modder flashes on each Telegram notification banner (needs Accessibility) and when the unread counter on its Dock icon grows. If neither appears, turn on banners for Telegram in System Settings → Notifications and “Show badge” / unread counter in Telegram → Settings → Notifications.",
+              "Telegram должен быть запущен на этом Mac. Modder мигает на каждый баннер уведомления Telegram (нужен Универсальный доступ) и когда растёт счётчик на иконке в Dock. Если нет ни того, ни другого — включите баннеры для Telegram в Системных настройках → Уведомления и счётчик непрочитанных в Telegram → Настройки → Уведомления.")}</span>
           </div>
         </div>
         <div className="space-y-3">

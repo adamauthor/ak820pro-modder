@@ -32,6 +32,8 @@ pub struct AppLighting {
 pub struct SmartConfig {
     pub teams_enabled: bool,
     pub teams_lighting: LightingConfig,
+    /// Shown while a Teams call is ringing (before it is answered).
+    pub teams_ring_lighting: LightingConfig,
     pub telegram_enabled: bool,
     pub telegram_color: String,
     pub telegram_flashes: u8,
@@ -46,6 +48,8 @@ impl Default for SmartConfig {
             // A saturated violet: Teams' own #6264A7 is so pale that the
             // LEDs render it as bluish white.
             teams_lighting: effect(Mode::Breath, TEAMS_COLOR, 5, 2),
+            // Fast pulse so a ringing call is hard to miss.
+            teams_ring_lighting: effect(Mode::Breath, TEAMS_COLOR, 5, 5),
             telegram_enabled: true,
             telegram_color: "0088FF".into(),
             telegram_flashes: 3,
@@ -122,10 +126,14 @@ struct Layers {
     app: Option<LightingConfig>,
     pomodoro: Option<LightingConfig>,
     teams: bool,
+    ringing: bool,
 }
 
 /// The configuration that should currently be on the keyboard.
 fn desired(layers: &Layers, config: &SmartConfig) -> Option<LightingConfig> {
+    if layers.ringing && config.teams_enabled {
+        return Some(config.teams_ring_lighting.clone());
+    }
     if layers.teams && config.teams_enabled {
         return Some(config.teams_lighting.clone());
     }
@@ -250,6 +258,14 @@ impl SmartLighting {
     pub async fn set_teams(self: &Arc<Self>, active: bool) {
         self.inner.lock().await.layers.teams = active;
         self.sync().await;
+    }
+    pub async fn set_ringing(self: &Arc<Self>, ringing: bool) {
+        self.inner.lock().await.layers.ringing = ringing;
+        self.sync().await;
+    }
+    /// Pauses writes while a TFT upload owns the keyboard.
+    pub async fn hold(&self, on: bool) {
+        self.inner.lock().await.flashing = on;
     }
     pub async fn teams_active(&self) -> bool {
         let inner = self.inner.lock().await;
@@ -393,7 +409,15 @@ mod tests {
             app: Some(solid("00FF00", 3)),
             pomodoro: Some(solid("FF0000", 5)),
             teams: true,
+            ringing: false,
         };
+        layers.ringing = true;
+        assert_eq!(
+            desired(&layers, &config).unwrap().speed,
+            5,
+            "ringing pulses"
+        );
+        layers.ringing = false;
         assert_eq!(desired(&layers, &config).unwrap().color, TEAMS_COLOR);
         layers.teams = false;
         assert_eq!(desired(&layers, &config).unwrap().color, "FF0000");

@@ -154,6 +154,67 @@ func badgeCount(_ label: String?) -> Int {
     return Int(digits) ?? 1 // "•" or other non-numeric badges still mean unread
 }
 
+let teamsAnswerButtons: Set<String> = ["accept", "accept call", "accept with video", "accept with audio", "decline", "decline call",
+                                       "принять", "принять вызов", "принять с видео", "принять с аудио", "отклонить", "отклонить вызов"]
+func isTeamsApp(_ app: NSRunningApplication) -> Bool { isTeamsBundle(app.bundleIdentifier ?? "") }
+
+/// An incoming Teams call shows a small window with Accept/Decline buttons.
+/// With Accessibility the buttons are matched by name; without it a small,
+/// floating, on-screen Teams window is taken as the ringing toast.
+func teamsRinging() -> Bool {
+    let teams = NSWorkspace.shared.runningApplications.filter(isTeamsApp)
+    guard !teams.isEmpty else { return false }
+    if AXIsProcessTrusted() {
+        for app in teams {
+            let root = AXUIElementCreateApplication(app.processIdentifier)
+            AXUIElementSetMessagingTimeout(root, 0.3)
+            for window in axAttribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? [] where isToastSized(window) {
+                if axFind(window, limit: 400, seconds: 0.4, where: { axRole($0) == kAXButtonRole && teamsAnswerButtons.contains(axName($0).lowercased()) }) != nil { return true }
+            }
+        }
+        return false
+    }
+    let pids = Set(teams.map(\.processIdentifier))
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+    return windows.contains { window in
+        guard let pid = window[kCGWindowOwnerPID as String] as? pid_t, pids.contains(pid),
+              let layer = window[kCGWindowLayer as String] as? Int, layer > 0, layer < 25,
+              let bounds = window[kCGWindowBounds as String] as? [String: Double],
+              let width = bounds["Width"], let height = bounds["Height"] else { return false }
+        return (250...720).contains(width) && (80...480).contains(height)
+    }
+}
+
+/// The call toast is small; skipping big windows keeps the check cheap.
+func isToastSized(_ window: AXUIElement) -> Bool {
+    guard let value = axAttribute(window, kAXSizeAttribute), CFGetTypeID(value) == AXValueGetTypeID() else { return false }
+    var size = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(value, to: AXValue.self), .cgSize, &size) else { return false }
+    return size.width <= 720 && size.height <= 480
+}
+
+/// Texts of notification banners currently on screen for Telegram. Each
+/// banner is one entry; a new entry means a new message notification.
+func telegramBanners() -> Set<String> {
+    guard AXIsProcessTrusted(), let center = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui").first else { return [] }
+    let root = AXUIElementCreateApplication(center.processIdentifier)
+    AXUIElementSetMessagingTimeout(root, 0.3)
+    var banners = Set<String>()
+    for window in axAttribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? [] {
+        var stack = [window], texts: [String] = [], count = 0
+        while let element = stack.popLast(), count < 150 {
+            count += 1
+            let name = axName(element)
+            if !name.isEmpty { texts.append(name) }
+            if let value = axAttribute(element, kAXValueAttribute) as? String, !value.isEmpty { texts.append(value) }
+            stack.append(contentsOf: axChildren(element))
+        }
+        let joined = texts.joined(separator: " | ")
+        if joined.localizedCaseInsensitiveContains("telegram") { banners.insert(joined) }
+    }
+    return banners
+}
+
 final class Detectors {
     private let queue = DispatchQueue(label: "local.ak820pro.detectors")
     private var timer: DispatchSourceTimer?
@@ -162,14 +223,16 @@ final class Detectors {
     // Teams opens the microphone briefly at launch and for device checks.
     // A call must hold it for a few seconds, and ends after a short silence.
     private var callSince: Date?, quietSince: Date?
+    private var lastRinging = false, seenBanners = Set<String>(), ticks = 0
     func configure(teams: Bool, telegram: Bool) {
         queue.async { [self] in
             self.teams = teams; self.telegram = telegram
             if !teams && lastCall { lastCall = false; emit(["event": "teams_call", "active": false]) }
+            if !teams && lastRinging { lastRinging = false; emit(["event": "teams_ringing", "active": false]) }
             if !telegram { lastBadge = nil }
             if (teams || telegram) && timer == nil {
                 let source = DispatchSource.makeTimerSource(queue: queue)
-                source.schedule(deadline: .now() + 1, repeating: 2)
+                source.schedule(deadline: .now() + 1, repeating: 1)
                 source.setEventHandler { [weak self] in self?.tick() }
                 source.resume(); timer = source
             } else if !teams && !telegram { timer?.cancel(); timer = nil }
@@ -189,8 +252,16 @@ final class Detectors {
                 ? !(quietSince.map { now.timeIntervalSince($0) >= 5 } ?? false)
                 : callSince.map { now.timeIntervalSince($0) >= 8 } ?? false
             if call != lastCall { lastCall = call; emit(["event": "teams_call", "active": call]) }
+            let ringing = !call && teamsRinging()
+            if ringing != lastRinging { lastRinging = ringing; emit(["event": "teams_ringing", "active": ringing]) }
         }
-        if telegram, let badge = telegramBadge() {
+        if telegram {
+            let banners = telegramBanners()
+            if !banners.subtracting(seenBanners).isEmpty { emit(["event": "telegram_message", "unread": -2]) }
+            seenBanners = banners
+        }
+        ticks += 1
+        if telegram, ticks % 2 == 0, let badge = telegramBadge() {
             if let lastBadge, badge > lastBadge { emit(["event": "telegram_message", "unread": badge]) }
             lastBadge = badge
         }

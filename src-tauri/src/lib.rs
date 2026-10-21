@@ -1396,6 +1396,11 @@ async fn smart_test(smart: State<'_, Arc<Smart>>, kind: String) -> Result<(), St
             tokio::time::sleep(std::time::Duration::from_secs(6)).await;
             lighting.set_teams(false).await;
         }
+        "teams_ring" => {
+            lighting.set_ringing(true).await;
+            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
+            lighting.set_ringing(false).await;
+        }
         _ => return Err("Unknown test".into()),
     }
     Ok(())

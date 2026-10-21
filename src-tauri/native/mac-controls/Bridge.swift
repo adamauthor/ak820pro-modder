@@ -356,8 +356,7 @@ public func ak820MacControlsRequest(_ input: UnsafePointer<CChar>) -> UnsafeMuta
         case "preview":
             guard controls.advanced else { throw MusicError.failed("Save custom knob controls before testing") }
             controls.cancelClicks(); controls.previewUntil = request["enabled"] as? Bool == true ? ProcessInfo.processInfo.systemUptime + 30 : 0; controls.events = []
-        case "permission":
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+        case "permission": controls.openAccessibility()
         case "menu_state": controls.setMenuState(request["state"] as? [String: Any] ?? [:])
         case "notify": postNotification(title: request["title"] as? String ?? "AK820", body: request["body"] as? String ?? "")
         case "detectors": controls.detectors.configure(teams: request["teams"] as? Bool == true, telegram: request["telegram"] as? Bool == true)

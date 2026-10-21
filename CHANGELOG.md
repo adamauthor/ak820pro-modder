@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [0.9.2-macos.1] — Incoming Teams calls and Telegram banners
+
+- Incoming Teams calls pulse fast in the Teams colour until answered or
+  declined (Accept/Decline buttons via Accessibility, or the small floating
+  call window as a fallback); a running call keeps breathing.
+- Telegram also flashes for each notification banner in Notification Center,
+  so it no longer depends on the Dock unread counter alone.
+- Pomodoro anime cards wait for the phase-change flash and retry while the
+  keyboard is briefly busy; lighting writes pause during every TFT upload.
+- “Open settings” asks macOS for Accessibility directly.
+
 ## [0.9.1-macos.1] — Fixes after hardware testing
 
 - Teams call detection ignores the microphone blips Teams makes at launch: a

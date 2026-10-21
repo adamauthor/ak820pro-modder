@@ -289,9 +289,20 @@ pub fn upload(scene: &Scene, config: &AnimeConfig) -> Result<(), String> {
         );
     }
     let anim = animation(scene, config)?;
-    let tft = Connection::open_tft().map_err(|e| e.to_string())?;
-    tft.upload_tft_animation_confirmed(&anim, true)
-        .map_err(|e| e.to_string())
+    // Battery reads and lighting briefly hold the keyboard's transaction lock.
+    let mut attempt = 0;
+    loop {
+        let result = Connection::open_tft()
+            .and_then(|tft| tft.upload_tft_animation_confirmed(&anim, true))
+            .map_err(|e| e.to_string());
+        match result {
+            Err(error) if error.contains("Another keyboard operation") && attempt < 8 => {
+                attempt += 1;
+                std::thread::sleep(std::time::Duration::from_millis(750));
+            }
+            other => return other,
+        }
+    }
 }
 
 fn base64(bytes: &[u8]) -> String {

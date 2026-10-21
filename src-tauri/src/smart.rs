@@ -115,6 +115,12 @@ impl Smart {
                     .on_frontmost(event["bundle"].as_str().map(String::from))
                     .await
             }
+            "teams_ringing" => {
+                tracing::info!(active = ?event["active"], "Teams incoming call");
+                self.lighting
+                    .set_ringing(event["active"].as_bool() == Some(true))
+                    .await;
+            }
             "teams_call" => {
                 tracing::info!(active = ?event["active"], "Teams call");
                 self.lighting
@@ -295,7 +301,28 @@ impl Smart {
         self.pomodoro_lighting(config).await;
         let lighting = self.lighting.clone();
         let color = config.color.clone();
-        tauri::async_runtime::spawn(async move { lighting.flash(&color, 3).await });
+        // The flash and the card share the keyboard's single transaction
+        // lock, so the card waits until the flash has finished.
+        let card = config.anime_screen.then(|| self.pomodoro_scene(&t, config));
+        let anime = self.anime_config.lock().await.clone();
+        tauri::async_runtime::spawn(async move {
+            lighting.flash(&color, 3).await;
+            if let Some(scene) = card.flatten() {
+                lighting.hold(true).await;
+                let result = tauri::async_runtime::spawn_blocking(move || {
+                    anime_screen::upload(&scene, &anime)
+                })
+                .await
+                .map_err(|e| e.to_string())
+                .and_then(|r| r);
+                match result {
+                    Ok(()) => tracing::info!("Pomodoro anime card uploaded"),
+                    Err(error) => tracing::warn!(%error, "Pomodoro anime card"),
+                }
+                lighting.hold(false).await;
+                lighting.restore().await;
+            }
+        });
         if config.notifications {
             let next = pomodoro::phase_name(t.next, russian);
             let body = match (waiting, russian) {
@@ -307,39 +334,27 @@ impl Smart {
             let title = format!("🍅 {}", pomodoro::phase_name(t.finished, russian));
             self.notify(&title, &body).await;
         }
-        if config.anime_screen {
-            let anime = self.anime_config.lock().await.clone();
-            let minutes = match t.next {
-                Phase::Focus => config.focus_minutes,
-                Phase::ShortBreak => config.short_break_minutes,
-                _ => config.long_break_minutes,
-            };
-            let phase = match t.next {
-                Phase::Focus => "focus",
-                Phase::ShortBreak => "break",
-                _ => "long_break",
-            };
-            let scene = ak820_anime::Scene::Pomodoro {
-                phase: phase.into(),
-                minutes,
-                round: self.timer.lock().await.round,
-            };
-            let lighting = self.lighting.clone();
-            tauri::async_runtime::spawn(async move {
-                let uploaded = tauri::async_runtime::spawn_blocking(move || {
-                    smart_lighting::usb_connected()
-                        && anime_screen::upload(&scene, &anime)
-                            .inspect_err(|error| tracing::warn!(%error, "Pomodoro anime card"))
-                            .is_ok()
-                })
-                .await
-                .unwrap_or(false);
-                // The FF13 image transfer can change the LEDs; redraw the layer.
-                if uploaded {
-                    lighting.restore().await;
-                }
-            });
+    }
+    /// The card for the phase that starts now; None without USB.
+    fn pomodoro_scene(
+        &self,
+        t: &pomodoro::Transition,
+        config: &PomodoroConfig,
+    ) -> Option<ak820_anime::Scene> {
+        if !smart_lighting::usb_connected() {
+            return None;
         }
+        let (phase, minutes) = match t.next {
+            Phase::Focus => ("focus", config.focus_minutes),
+            Phase::ShortBreak => ("break", config.short_break_minutes),
+            _ => ("long_break", config.long_break_minutes),
+        };
+        let round = self.timer.try_lock().map(|t| t.round).unwrap_or(0);
+        Some(ak820_anime::Scene::Pomodoro {
+            phase: phase.into(),
+            minutes,
+            round,
+        })
     }
 
     // MARK: battery
@@ -458,12 +473,15 @@ impl Smart {
         let config = self.anime_config().await;
         let youtube = self.youtube_playing(scene).await;
         let name = scene.to_string();
+        self.lighting.hold(true).await;
         let result = tauri::async_runtime::spawn_blocking(move || {
             let built = anime_screen::build_scene(&name, &config, youtube)?;
             anime_screen::upload(&built, &config)
         })
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+        self.lighting.hold(false).await;
         // The FF13 image transfer can change the LEDs; redraw the winning layer.
         self.lighting.restore().await;
         match &result {
