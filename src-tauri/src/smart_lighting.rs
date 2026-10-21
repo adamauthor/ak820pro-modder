@@ -393,6 +393,7 @@ impl SmartLighting {
             return;
         }
         let ok = self.write(&target).await.is_ok();
+        tracing::info!(ok, mode = target.mode.name(), color = %target.color, brightness = target.brightness, "lighting applied");
         let mut inner = self.inner.lock().await;
         inner.written = ok.then_some(wanted);
         inner.touched |= ok;

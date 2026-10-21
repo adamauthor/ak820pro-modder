@@ -50,7 +50,10 @@ final class NativeControls: NSObject, NSMenuDelegate {
 
     override init() {
         super.init()
-        controller.status = { [weak self] message in self?.message = message; self?.lastError = message.hasPrefix("Error:") ? message : nil }
+        controller.status = { [weak self] message in
+            self?.message = message; self?.lastError = message.hasPrefix("Error:") ? message : nil
+            emit(["event": "debug", "detail": ["player": message]])
+        }
     }
     func configure(_ request: [String: Any]) throws {
         guard let object = request["config"], let path = request["directory"] as? String, path.hasPrefix("/") else { throw MusicError.failed("Invalid Mac control configuration") }
@@ -81,8 +84,9 @@ final class NativeControls: NSObject, NSMenuDelegate {
             }
         }
         if commandObserver == nil {
-            commandObserver = DistributedNotificationCenter.default().addObserver(forName: commandNotification, object: nil, queue: .main) { note in
+            commandObserver = DistributedNotificationCenter.default().addObserver(forName: commandNotification, object: nil, queue: .main) { [weak self] note in
                 guard let command = note.object as? String, let colon = command.firstIndex(of: ":") else { return }
+                if command.hasPrefix("music:") { self?.perform(click: String(command.dropFirst(6))); return }
                 emit(["event": "menu", "command": String(command[..<colon]), "value": String(command[command.index(after: colon)...])])
             }
         }

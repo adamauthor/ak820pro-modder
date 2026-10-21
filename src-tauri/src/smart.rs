@@ -22,6 +22,8 @@ struct Status {
     last_anime: Option<Instant>,
     rotation: usize,
     last_track: Option<String>,
+    /// The TFT shows a Pomodoro card that should be replaced when it ends.
+    pomodoro_card: bool,
 }
 
 pub struct Smart {
@@ -282,6 +284,8 @@ impl Smart {
                 }
                 "stop" => {
                     timer.stop();
+                    drop(timer);
+                    self.replace_pomodoro_card();
                     None
                 }
                 "skip" => timer.skip(&config),
@@ -328,7 +332,13 @@ impl Smart {
         // The flash and the card share the keyboard's single transaction
         // lock, so the card waits until the flash has finished.
         let card = config.anime_screen.then(|| self.pomodoro_scene(&t, config));
-        let anime = self.anime_config.lock().await.clone();
+        // A single frame uploads in about two seconds instead of ten, so the
+        // keyboard is busy (and its lighting paused) only briefly.
+        let anime = AnimeConfig {
+            animated: false,
+            ..self.anime_config.lock().await.clone()
+        };
+        let me = self.clone();
         tauri::async_runtime::spawn(async move {
             lighting.flash(&color, 3).await;
             if let Some(scene) = card.flatten() {
@@ -340,7 +350,10 @@ impl Smart {
                 .map_err(|e| e.to_string())
                 .and_then(|r| r);
                 match result {
-                    Ok(()) => tracing::info!("Pomodoro anime card uploaded"),
+                    Ok(()) => {
+                        tracing::info!("Pomodoro anime card uploaded");
+                        me.status.lock().await.pomodoro_card = true;
+                    }
                     Err(error) => tracing::warn!(%error, "Pomodoro anime card"),
                 }
                 lighting.end_upload(exclusive).await;
@@ -358,6 +371,18 @@ impl Smart {
             let title = format!("🍅 {}", pomodoro::phase_name(t.finished, russian));
             self.notify(&title, &body).await;
         }
+    }
+    /// After Stop, swaps the Pomodoro card for the regular greeting card.
+    fn replace_pomodoro_card(self: &Arc<Self>) {
+        let me = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let shown = std::mem::take(&mut me.status.lock().await.pomodoro_card);
+            if shown && smart_lighting::usb_connected() {
+                if let Err(error) = me.anime_upload("daily").await {
+                    tracing::warn!(%error, "replacing the Pomodoro card");
+                }
+            }
+        });
     }
     /// The card for the phase that starts now; None without USB.
     fn pomodoro_scene(
@@ -509,7 +534,10 @@ impl Smart {
         // The FF13 image transfer can change the LEDs; redraw the winning layer.
         self.lighting.restore().await;
         match &result {
-            Ok(()) => tracing::info!(scene, "anime card uploaded"),
+            Ok(()) => {
+                tracing::info!(scene, "anime card uploaded");
+                self.status.lock().await.pomodoro_card = false;
+            }
             Err(error) => tracing::warn!(scene, %error, "anime card failed"),
         }
         result?;

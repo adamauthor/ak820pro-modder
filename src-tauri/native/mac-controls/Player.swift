@@ -40,12 +40,39 @@ struct YouTubePlayer {
 func playerWindow(_ pid: pid_t) -> AXUIElement? {
     let root = AXUIElementCreateApplication(pid)
     AXUIElementSetMessagingTimeout(root, 0.5)
-    if let windows = axAttribute(root, kAXWindowsAttribute) as? [AXUIElement],
-       let window = windows.first(where: { axName($0).contains("YouTube Music") }) ?? windows.first {
+    let listed = axAttribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? []
+    let windows = listed.isEmpty ? offSpaceWindows(pid) : listed
+    if let window = windows.first(where: { axName($0).contains("YouTube Music") }) ?? windows.first {
         AXUIElementSetMessagingTimeout(window, 0.5)
         return window
     }
     return nil
+}
+
+// AXWindows omits windows on other Spaces and in full screen. Window-switcher
+// apps reach them by recreating their AX elements from the process token.
+@_silgen_name("_AXUIElementCreateWithRemoteToken")
+private func axCreateWithRemoteToken(_ token: CFData) -> Unmanaged<AXUIElement>?
+private var offSpaceCache: [pid_t: AXUIElement] = [:]
+private let offSpaceLock = NSLock()
+func offSpaceWindows(_ pid: pid_t) -> [AXUIElement] {
+    offSpaceLock.lock(); defer { offSpaceLock.unlock() }
+    if let cached = offSpaceCache[pid], axRole(cached) == kAXWindowRole { return [cached] }
+    offSpaceCache[pid] = nil
+    var token = Data(count: 20)
+    token.replaceSubrange(0..<4, with: withUnsafeBytes(of: pid) { Data($0) })
+    token.replaceSubrange(4..<8, with: withUnsafeBytes(of: Int32(0)) { Data($0) })
+    token.replaceSubrange(8..<12, with: withUnsafeBytes(of: Int32(0x636f636f)) { Data($0) })
+    for id in UInt64(0)..<2000 {
+        token.replaceSubrange(12..<20, with: withUnsafeBytes(of: id) { Data($0) })
+        guard let element = axCreateWithRemoteToken(token as CFData)?.takeRetainedValue() else { continue }
+        AXUIElementSetMessagingTimeout(element, 0.2)
+        guard axRole(element) == kAXWindowRole,
+              (axAttribute(element, kAXSubroleAttribute) as? String) == kAXStandardWindowSubrole else { continue }
+        offSpaceCache[pid] = element
+        return [element]
+    }
+    return []
 }
 func playerRoot(_ pid: pid_t) -> AXUIElement {
     playerWindow(pid) ?? AXUIElementCreateApplication(pid)
@@ -155,9 +182,20 @@ func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID: pid_
     // Never interpret a percentage as seconds without a confirmed elapsed time.
     guard let step = timelineStep(value: value, maximum: maximum,
         description: axAttribute(slider, kAXValueDescriptionAttribute) as? String, delta: delta) else { throw MusicError.failed("Cannot determine the seek timeline units for this player") }
-    let target = min(maximum, max(0, value + step)), tolerance = abs(step / delta) * 0.55
+    // Playback keeps moving and YouTube steps in 5-second units, so accept
+    // landing within 2.6 seconds of the target.
+    let perSecond = abs(step / delta)
+    let target = min(maximum, max(0, value + step)), tolerance = perSecond * 2.6
     func position() -> Double { (axAttribute(slider, kAXValueAttribute) as? NSNumber)?.doubleValue ?? value }
     func confirmed() -> Bool { abs(position() - target) <= tolerance }
+    /// Waits briefly for the player to report a new position after a step.
+    func moved(from before: Double) -> Bool {
+        for _ in 0..<8 {
+            if abs(position() - before) >= perSecond * 0.5 { return true }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        return false
+    }
     if confirmed() { return }
     if AXUIElementSetAttributeValue(slider, kAXValueAttribute as CFString, NSNumber(value: target)) == .success {
         Thread.sleep(forTimeInterval: 0.08)
@@ -171,9 +209,7 @@ func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID: pid_
         for _ in 0..<10 {
             if confirmed() { return }
             let before = position(), action = target > before ? kAXIncrementAction : kAXDecrementAction
-            guard AXUIElementPerformAction(slider, action as CFString) == .success else { break }
-            Thread.sleep(forTimeInterval: 0.07)
-            if abs(position() - before) < tolerance / 2 { break }
+            guard AXUIElementPerformAction(slider, action as CFString) == .success, moved(from: before) else { break }
         }
         if confirmed() { return }
     }
@@ -205,10 +241,11 @@ func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID: pid_
               let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { break }
         down.flags = []; up.flags = []
         down.postToPid(applicationPID); up.postToPid(applicationPID)
-        Thread.sleep(forTimeInterval: 0.07)
-        if abs(position() - before) < tolerance / 2 { break }
+        if !moved(from: before) { break }
     }
-    guard confirmed() else {
+    // A jump most of the way there is a success; the player rounds steps.
+    let progressed = (position() - value) * (target - value) > 0 && abs(position() - value) >= abs(target - value) * 0.5
+    guard confirmed() || progressed else {
         emit(["event": "debug", "detail": ["seek": "unconfirmed", "role": axRole(slider), "name": axName(slider), "start": value, "now": position(),
               "target": target, "max": maximum, "description": axAttribute(slider, kAXValueDescriptionAttribute) as? String ?? ""]])
         throw MusicError.failed("The player did not confirm seeking")
@@ -307,6 +344,8 @@ final class MusicController {
             route = chooseMusicService(preferred: preferred, follow: follow,
                 playing: playing, available: Set(surfaces.keys).union(native.keys), last: lastRoute)
             if action == "liked" { route = "youtube_music" }
+            emit(["event": "debug", "detail": ["action": action, "route": route, "playing": Array(playing), "ax_surfaces": Array(surfaces.keys),
+                  "native": Array(native.keys), "unavailable": unavailable]])
             let bundle = serviceBundle(route, youtube: youtube)
             do {
                 guard isCurrent(request) else { return }

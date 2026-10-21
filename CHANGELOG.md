@@ -21,6 +21,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   e.g. `pomodoro:start`, `anime:now_playing`, `lighting:off`, `test:telegram`
   (`"…/AK820 Pro Modder.app/Contents/MacOS/ak820pro-app" --command …`).
 - Knob gestures and seek diagnostics are written to the log.
+- YouTube Music in full screen or on another desktop is controlled in place:
+  its window is found even when macOS hides it from the window list, so play,
+  pause, seek and now-playing cards no longer reopen or need it in front.
+- Seeking accepts landing within 2.6 s (playback keeps moving) and waits for
+  the player to report each step.
+- Telegram banners are counted only in banner-sized windows; the open
+  Notification Center list caused repeated flashes that kept the normal
+  lighting from returning.
+- Pomodoro cards are single-frame (about 2 s to upload instead of 10), and
+  Stop replaces the Pomodoro card with the greeting card.
 
 ## [0.9.1-macos.1] — Fixes after hardware testing
 

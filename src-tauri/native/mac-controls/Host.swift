@@ -193,14 +193,15 @@ func isToastSized(_ window: AXUIElement) -> Bool {
     return size.width <= 720 && size.height <= 480
 }
 
-/// Texts of notification banners currently on screen for Telegram. Each
-/// banner is one entry; a new entry means a new message notification.
-func telegramBanners() -> Set<String> {
-    guard AXIsProcessTrusted(), let center = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui").first else { return [] }
+/// Number of Telegram banners on screen. Only banner-sized windows count:
+/// the open Notification Center list and widgets mention Telegram too and
+/// change their texts ("now", "1m ago") all the time.
+func telegramBannerCount() -> Int {
+    guard AXIsProcessTrusted(), let center = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.notificationcenterui").first else { return 0 }
     let root = AXUIElementCreateApplication(center.processIdentifier)
     AXUIElementSetMessagingTimeout(root, 0.3)
-    var banners = Set<String>()
-    for window in axAttribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? [] {
+    var banners = 0
+    for window in axAttribute(root, kAXWindowsAttribute) as? [AXUIElement] ?? [] where isBannerSized(window) {
         var stack = [window], texts: [String] = [], count = 0
         while let element = stack.popLast(), count < 150 {
             count += 1
@@ -209,10 +210,15 @@ func telegramBanners() -> Set<String> {
             if let value = axAttribute(element, kAXValueAttribute) as? String, !value.isEmpty { texts.append(value) }
             stack.append(contentsOf: axChildren(element))
         }
-        let joined = texts.joined(separator: " | ")
-        if joined.localizedCaseInsensitiveContains("telegram") { banners.insert(joined) }
+        if texts.contains(where: { $0.localizedCaseInsensitiveContains("telegram") }) { banners += 1 }
     }
     return banners
+}
+func isBannerSized(_ window: AXUIElement) -> Bool {
+    guard let value = axAttribute(window, kAXSizeAttribute), CFGetTypeID(value) == AXValueGetTypeID() else { return false }
+    var size = CGSize.zero
+    guard AXValueGetValue(unsafeBitCast(value, to: AXValue.self), .cgSize, &size) else { return false }
+    return size.width <= 520 && size.height <= 260
 }
 
 final class Detectors {
@@ -223,7 +229,7 @@ final class Detectors {
     // Teams opens the microphone briefly at launch and for device checks.
     // A call must hold it for a few seconds, and ends after a short silence.
     private var callSince: Date?, quietSince: Date?
-    private var lastRinging = false, seenBanners = Set<String>(), ticks = 0
+    private var lastRinging = false, lastBanners = 0, ticks = 0
     func configure(teams: Bool, telegram: Bool) {
         queue.async { [self] in
             self.teams = teams; self.telegram = telegram
@@ -256,9 +262,9 @@ final class Detectors {
             if ringing != lastRinging { lastRinging = ringing; emit(["event": "teams_ringing", "active": ringing]) }
         }
         if telegram {
-            let banners = telegramBanners()
-            if !banners.subtracting(seenBanners).isEmpty { emit(["event": "telegram_message", "unread": -2]) }
-            seenBanners = banners
+            let banners = telegramBannerCount()
+            if banners > lastBanners { emit(["event": "telegram_message", "unread": -2]) }
+            lastBanners = banners
         }
         ticks += 1
         if telegram, ticks % 2 == 0, let badge = telegramBadge() {
