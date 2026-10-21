@@ -345,6 +345,10 @@ public func ak820MacControlsSelftest() -> Int32 {
         }
         let released = try NativeFileLock(lockFile)
         withExtendedLifetime(released) { }
+        guard youtubeActionAfterReopen("toggle", alreadyRunning: true) == "toggle",
+              youtubeActionAfterReopen("toggle", alreadyRunning: false) == "play",
+              youtubeActionAfterReopen("seek_forward", alreadyRunning: true) == "seek_forward",
+              youtubeActionAfterReopen("next", alreadyRunning: true) == "next" else { return 23 }
         return 0
     } catch { return 6 }
 }

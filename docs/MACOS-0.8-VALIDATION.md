@@ -81,3 +81,15 @@ an executable app; release/rollback artifacts are ZIP archives. The temporary
 QA browser profile (including Caps Lock → Escape) was removed from the user's
 configuration. Physical playback verification follows the rebuilt app's
 macOS Accessibility identity refresh.
+
+### Closed-window playback follow-up
+
+The user confirmed physical output-volume changes after the recovery. A
+follow-up found that reopening a surviving YouTube Music process swallowed
+its first toggle, and seeking still depended on the player being foreground.
+The follow-up build preserves toggle/track/seek intent across reopening,
+reopens an existing player without activating it, and tries the seek control's
+own increment/decrement actions before guarded, process-targeted keyboard
+input. The native contract fixture passes and the release build succeeds.
+Actual first-click/background-seek verification remains pending: the computer
+use service explicitly reported a locked Mac at the next launch attempt.

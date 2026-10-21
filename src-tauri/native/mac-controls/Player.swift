@@ -163,13 +163,33 @@ func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID: pid_
         Thread.sleep(forTimeInterval: 0.08)
         if confirmed() { return }
     }
+    // Increment/decrement targets the AX control itself and works while the
+    // player is behind another app; unlike keyboard delivery it needs no focus.
+    var actionNames: CFArray?
+    if AXUIElementCopyActionNames(slider, &actionNames) == .success,
+       let actions = actionNames as? [String], actions.contains(kAXIncrementAction), actions.contains(kAXDecrementAction) {
+        for _ in 0..<10 {
+            if confirmed() { return }
+            let before = position(), action = target > before ? kAXIncrementAction : kAXDecrementAction
+            guard AXUIElementPerformAction(slider, action as CFString) == .success else { break }
+            Thread.sleep(forTimeInterval: 0.07)
+            if abs(position() - before) < tolerance / 2 { break }
+        }
+        if confirmed() { return }
+    }
     // Safari reports this HTML range as a settable progress indicator, but its
     // AX setter can succeed without changing playback. Focus only that range
     // and address arrow events to the verified player process, never globally.
     let application = AXUIElementCreateApplication(applicationPID)
     let previousFocus = axAttribute(application, kAXFocusedUIElementAttribute)
+    func sliderHasFocus() -> Bool {
+        if let focused = axAttribute(application, kAXFocusedUIElementAttribute) { return CFEqual(focused, slider) }
+        // An inactive Safari app can omit its application-level focused element
+        // while retaining DOM focus on the range. Verify that range directly.
+        return (axAttribute(slider, kAXFocusedAttribute) as? NSNumber)?.boolValue == true
+    }
     guard AXUIElementSetAttributeValue(slider, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
-          let focused = axAttribute(application, kAXFocusedUIElementAttribute), CFEqual(focused, slider),
+          sliderHasFocus(),
           let source = CGEventSource(stateID: .privateState) else { throw MusicError.failed("The player did not accept seeking") }
     defer {
         if let previousFocus, CFGetTypeID(previousFocus) == AXUIElementGetTypeID(),
@@ -179,7 +199,7 @@ func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID: pid_
     }
     for _ in 0..<10 {
         if confirmed() { return }
-        guard let focused = axAttribute(application, kAXFocusedUIElementAttribute), CFEqual(focused, slider) else { break }
+        guard sliderHasFocus() else { break }
         let before = position(), key: CGKeyCode = target > before ? 124 : 123
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { break }
@@ -200,6 +220,11 @@ func chooseMusicService(preferred: String, follow: Bool, playing: Set<String>, a
     if let active = ["youtube_music", "spotify", "apple_music"].first(where: playing.contains) { return active }
     if let last, available.contains(last) { return last }
     return preferred
+}
+func youtubeActionAfterReopen(_ action: String, alreadyRunning: Bool) -> String {
+    // A cold launch starts playback. Reopening an existing player must retain
+    // the requested toggle/seek/track action rather than swallowing the click.
+    action == "toggle" && !alreadyRunning ? "play" : action
 }
 
 final class MusicController {
@@ -289,8 +314,13 @@ final class MusicController {
                     finish("\(route == "youtube_music" ? "YouTube Music" : route == "spotify" ? "Spotify" : "Apple Music"): \(action == "toggle" ? surface.playing ? "paused" : "playing" : action)", request: request)
                 } else if action == "toggle" {
                     lastRoute = route
-                    if route == "youtube_music" { launchAndPlay(bundle: bundle, request: request) }
+                    if route == "youtube_music" {
+                        let running = unavailable[route] != nil
+                        launchAndPlay(bundle: bundle, request: request, action: youtubeActionAfterReopen(action, alreadyRunning: running), activates: !running)
+                    }
                     else { openNative(bundle: bundle, play: true, route: route, request: request) }
+                } else if route == "youtube_music", unavailable[route] != nil, ["next", "previous", "seek_forward", "seek_backward"].contains(action) {
+                    launchAndPlay(bundle: bundle, request: request, action: action, activates: false)
                 } else { throw MusicError.failed(unavailable[route].map { "Player unavailable: \($0)" } ?? "Start a track in the selected player first") }
             } catch { finish("Error: \(error)", request: request) }
         }
@@ -334,13 +364,13 @@ final class MusicController {
         }
     }
 
-    private func launchAndPlay(forceLiked: Bool = false, bundle: String, request: UInt64) {
+    private func launchAndPlay(forceLiked: Bool = false, bundle: String, request: UInt64, action: String = "play", activates: Bool = true) {
         DispatchQueue.main.async { [self] in
             guard isCurrent(request) else { return }
             status("Opening YouTube Music…")
             guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundle) else { finish("Install YouTube Music as a Safari web app first", request: request); return }
             let configuration = NSWorkspace.OpenConfiguration()
-            configuration.activates = true
+            configuration.activates = activates
             let ready: (NSRunningApplication?, Error?) -> Void = { [self] application, error in
                 guard isCurrent(request) else { return }
                 guard let application, error == nil else { finish("Could not open YouTube Music", request: request); return }
@@ -357,11 +387,24 @@ final class MusicController {
                                 continue
                             }
                             if !forceLiked, let player = findPlayer(root) {
-                                if !player.playing { guard isCurrent(request) else { return }; try pressAX(player.button) }
-                                try confirmPlayback(root, request: request)
-                                finish("YouTube Music: playing", request: request)
+                                guard isCurrent(request) else { return }
+                                switch action {
+                                case "play", "toggle":
+                                    let wanted = action == "play" || !player.playing
+                                    if player.playing != wanted { try pressAX(player.button) }
+                                    try confirmPlayback(root, request: request, playing: wanted)
+                                    finish("YouTube Music: \(wanted ? "playing" : "paused")", request: request)
+                                case "next", "previous", "seek_forward", "seek_backward":
+                                    guard let surface = mediaSurface(root, service: "youtube_music") else { throw MusicError.failed("This player's seek control is unavailable") }
+                                    if action == "next" { guard let button = surface.next else { throw MusicError.failed("Next track is unavailable in this player") }; try pressAX(button) }
+                                    else if action == "previous" { guard let button = surface.previous else { throw MusicError.failed("Previous track is unavailable in this player") }; try pressAX(button) }
+                                    else { try seekSurface(surface, by: action == "seek_forward" ? 5 : -5, applicationPID: running.processIdentifier) }
+                                    finish("YouTube Music: \(action)", request: request)
+                                default: throw MusicError.failed("Unknown music action")
+                                }
                                 return
                             }
+                            if !forceLiked && !["play", "toggle"].contains(action) { throw MusicError.failed("Start a track in the selected player first") }
                             // The pinned Liked Music play action starts the playlist from an empty queue.
                             if (try? startLikedMusic(root, canPress: { isCurrent(request) })) != nil {
                                 try confirmPlayback(root, request: request)
@@ -390,10 +433,10 @@ final class MusicController {
         throw MusicError.failed("Choose a track in the selected music app first")
     }
 
-    private func confirmPlayback(_ root: AXUIElement, request: UInt64) throws {
+    private func confirmPlayback(_ root: AXUIElement, request: UInt64, playing: Bool = true) throws {
         for _ in 0..<12 {
             guard isCurrent(request) else { throw MusicError.failed("Playback action cancelled") }
-            if findPlayer(root)?.playing == true { return }
+            if findPlayer(root)?.playing == playing { return }
             Thread.sleep(forTimeInterval: 0.25)
         }
         throw MusicError.failed("YT Music did not confirm playback; check the network or sign-in")
