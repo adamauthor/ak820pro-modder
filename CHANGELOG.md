@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [0.9.3-macos.1] — Smooth seeking, context screen and new presets
+
+- Seeking: one knob detent is one second, turned as far as you like. Spotify
+  and Apple Music seek by the exact second. YouTube Music only seeks from its
+  own Shift+arrow shortcut (10 s; Accessibility value changes are ignored), so
+  detents add up and every 10 make one jump. The keys go straight to its
+  process: no focus change, no player page, no window brought forward. The
+  menu-bar item shows the seconds turned (⏩ +7 s).
+- Anime screen follows the context: while music plays it shows the current
+  track and checks for a new one every 2 minutes; otherwise greeting and
+  weather take turns (every 30 minutes by default); Pomodoro cards come first.
+- Automatic cards are single-frame by default: the FF13 firmware pauses the
+  lighting for the whole image transfer, about 1.5 s instead of 8 s. The
+  lighting is redrawn right after each upload.
+- Presets rebuilt around the current features: Work (GoLand/DBeaver/Postman
+  colours, 50/10 Pomodoro), Deep focus, Calls (click mutes the mic), Music,
+  Gaming and Night. Each combines lighting, smart lighting, Pomodoro, anime
+  screen and knob gestures; every part can be left out, and personal
+  settings (city, upload consent, music service, profiles, mappings) are kept.
+
 ## [0.9.2-macos.1] — Incoming Teams calls and Telegram banners
 
 - Incoming Teams calls pulse fast in the Teams colour until answered or

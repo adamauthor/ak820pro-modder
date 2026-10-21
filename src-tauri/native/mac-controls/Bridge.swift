@@ -28,6 +28,9 @@ final class NativeControls: NSObject, NSMenuDelegate {
     let battery = BluetoothBattery()
     var statusItem: NSStatusItem?
     var menuState: [String: Any] = [:]
+    // Seconds turned in the current seek gesture, shown next to the icon.
+    var seekShown = 0
+    var seekHide: DispatchWorkItem?
     var backgroundActivity: NSObjectProtocol?
     var applicationObserver: NSObjectProtocol?
     var instanceObserver: NSObjectProtocol?
@@ -238,7 +241,9 @@ final class NativeControls: NSObject, NSMenuDelegate {
         do {
             switch action {
             case "volume": try stepVolume(direction)
-            case "seek": controller.perform(direction > 0 ? "seek_forward" : "seek_backward")
+            case "seek":
+                showSeek(direction)
+                controller.perform(direction > 0 ? "seek_forward" : "seek_backward")
             case "zoom", "tabs", "scroll": try performContextTurn(action, direction: direction, expectedBundle: activeBundle)
             default: break
             }
@@ -284,6 +289,14 @@ final class NativeControls: NSObject, NSMenuDelegate {
         updateStatusTitle()
     }
     func setMenuState(_ state: [String: Any]) { menuState = state; updateStatusTitle() }
+    func showSeek(_ direction: Int) {
+        if seekShown * direction < 0 { seekShown = 0 }
+        seekShown += direction
+        statusItem?.button?.title = String(format: " %@%d s", seekShown > 0 ? "⏩ +" : "⏪ −", abs(seekShown))
+        seekHide?.cancel()
+        let task = DispatchWorkItem { [weak self] in self?.seekShown = 0; self?.updateStatusTitle() }
+        seekHide = task; DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: task)
+    }
     func updateStatusTitle() {
         // Only the Pomodoro countdown and a missing permission are shown next
         // to the icon; battery and everything else live in the menu.

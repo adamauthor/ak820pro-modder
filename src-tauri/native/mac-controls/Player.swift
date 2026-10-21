@@ -170,87 +170,29 @@ func mediaSurface(_ root: AXUIElement, service: String) -> MediaSurface? {
     }
     return MediaSurface(root: root, toggle: button, playing: pauseNames.contains(axName(button).lowercased()), next: transport(nextNames, ".trailingTransportControl"), previous: transport(previousNames, ".leadingTransportControl"))
 }
-func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID: pid_t) throws {
-    guard let slider = axFind(surface.root, limit: 200, seconds: 1, where: { element in
-        let name = axName(element).lowercased(), id = (axAttribute(element, kAXIdentifierAttribute) as? String ?? "").lowercased()
-        return [kAXSliderRole, kAXProgressIndicatorRole].contains(axRole(element)) && ["progress", "seek", "playback", "elapsed", "position", "воспроизведения", "позиция"].contains(where: { name.contains($0) || id.contains($0) })
-    }), let value = (axAttribute(slider, kAXValueAttribute) as? NSNumber)?.doubleValue,
-        let maximum = (axAttribute(slider, kAXMaxValueAttribute) as? NSNumber)?.doubleValue, maximum > 0 else { throw MusicError.failed("This player's seek control is unavailable") }
-    var settable = DarwinBoolean(false)
-    guard AXUIElementIsAttributeSettable(slider, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue else { throw MusicError.failed("This player does not expose seeking to Accessibility") }
-    // AXValueDescription provides the elapsed time when the value is normalized.
-    // Never interpret a percentage as seconds without a confirmed elapsed time.
-    guard let step = timelineStep(value: value, maximum: maximum,
-        description: axAttribute(slider, kAXValueDescriptionAttribute) as? String, delta: delta) else { throw MusicError.failed("Cannot determine the seek timeline units for this player") }
-    // Playback keeps moving and YouTube steps in 5-second units, so accept
-    // landing within 2.6 seconds of the target.
-    let perSecond = abs(step / delta)
-    let target = min(maximum, max(0, value + step)), tolerance = perSecond * 2.6
-    func position() -> Double { (axAttribute(slider, kAXValueAttribute) as? NSNumber)?.doubleValue ?? value }
-    func confirmed() -> Bool { abs(position() - target) <= tolerance }
-    /// Waits briefly for the player to report a new position after a step.
-    func moved(from before: Double) -> Bool {
-        for _ in 0..<8 {
-            if abs(position() - before) >= perSecond * 0.5 { return true }
-            Thread.sleep(forTimeInterval: 0.05)
-        }
-        return false
-    }
-    if confirmed() { return }
-    if AXUIElementSetAttributeValue(slider, kAXValueAttribute as CFString, NSNumber(value: target)) == .success {
-        Thread.sleep(forTimeInterval: 0.08)
-        if confirmed() { return }
-    }
-    // Increment/decrement targets the AX control itself and works while the
-    // player is behind another app; unlike keyboard delivery it needs no focus.
-    var actionNames: CFArray?
-    if AXUIElementCopyActionNames(slider, &actionNames) == .success,
-       let actions = actionNames as? [String], actions.contains(kAXIncrementAction), actions.contains(kAXDecrementAction) {
-        for _ in 0..<10 {
-            if confirmed() { return }
-            let before = position(), action = target > before ? kAXIncrementAction : kAXDecrementAction
-            guard AXUIElementPerformAction(slider, action as CFString) == .success, moved(from: before) else { break }
-        }
-        if confirmed() { return }
-    }
-    // Safari reports this HTML range as a settable progress indicator, but its
-    // AX setter can succeed without changing playback. Focus only that range
-    // and address arrow events to the verified player process, never globally.
-    let application = AXUIElementCreateApplication(applicationPID)
-    let previousFocus = axAttribute(application, kAXFocusedUIElementAttribute)
-    func sliderHasFocus() -> Bool {
-        if let focused = axAttribute(application, kAXFocusedUIElementAttribute) { return CFEqual(focused, slider) }
-        // An inactive Safari app can omit its application-level focused element
-        // while retaining DOM focus on the range. Verify that range directly.
-        return (axAttribute(slider, kAXFocusedAttribute) as? NSNumber)?.boolValue == true
-    }
-    guard AXUIElementSetAttributeValue(slider, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
-          sliderHasFocus(),
-          let source = CGEventSource(stateID: .privateState) else { throw MusicError.failed("The player did not accept seeking") }
-    defer {
-        if let previousFocus, CFGetTypeID(previousFocus) == AXUIElementGetTypeID(),
-           let current = axAttribute(application, kAXFocusedUIElementAttribute), CFEqual(current, slider) {
-            _ = AXUIElementSetAttributeValue(unsafeBitCast(previousFocus, to: AXUIElement.self), kAXFocusedAttribute as CFString, kCFBooleanTrue)
-        }
-    }
-    for _ in 0..<10 {
-        if confirmed() { return }
-        guard sliderHasFocus() else { break }
-        let before = position(), key: CGKeyCode = target > before ? 124 : 123
+/// Moves the player's timeline by about `delta` seconds and returns how far
+/// it actually moved, so the remainder can be carried into the next detent.
+/// YouTube Music ignores Accessibility value changes and only seeks from its
+/// own Shift+arrow shortcut (10 s). The keys go straight to its process, so
+/// nothing is focused and no window or page comes forward.
+@discardableResult
+func seekSurface(_ surface: MediaSurface, by delta: Double, applicationPID pid: pid_t) throws -> Double {
+    let unit = 10.0
+    let jumps = Int((abs(delta) / unit).rounded(.down))
+    guard jumps > 0 else { return 0 }
+    guard let source = CGEventSource(stateID: .privateState) else { throw MusicError.failed("Cannot create a keyboard event") }
+    let key: CGKeyCode = delta > 0 ? 124 : 123
+    for _ in 0..<min(jumps, 30) {
         guard let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
               let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else { break }
-        down.flags = []; up.flags = []
-        down.postToPid(applicationPID); up.postToPid(applicationPID)
-        if !moved(from: before) { break }
+        down.flags = .maskShift; up.flags = .maskShift
+        down.postToPid(pid); up.postToPid(pid)
+        Thread.sleep(forTimeInterval: 0.04)
     }
-    // A jump most of the way there is a success; the player rounds steps.
-    let progressed = (position() - value) * (target - value) > 0 && abs(position() - value) >= abs(target - value) * 0.5
-    guard confirmed() || progressed else {
-        emit(["event": "debug", "detail": ["seek": "unconfirmed", "role": axRole(slider), "name": axName(slider), "start": value, "now": position(),
-              "target": target, "max": maximum, "description": axAttribute(slider, kAXValueDescriptionAttribute) as? String ?? ""]])
-        throw MusicError.failed("The player did not confirm seeking")
-    }
+    _ = surface
+    return Double(min(jumps, 30)) * unit * (delta > 0 ? 1 : -1)
 }
+
 func displayName(_ route: String) -> String {
     route == "youtube_music" ? "YouTube Music" : route == "spotify" ? "Spotify" : "Apple Music"
 }
@@ -280,6 +222,9 @@ final class MusicController {
     // quick burst of knob detents instead of walking the AX tree each time.
     private var seekCache: (route: String, surface: MediaSurface, time: TimeInterval)?
     private var pendingSeek = 0 // Main queue only: detents that arrived while busy.
+    // Worker only: seconds requested but not yet applied because the player
+    // moves in coarser steps than one knob detent.
+    private var seekCarry = 0.0, seekCarryAt: TimeInterval = 0
     private var busy = false // Main queue only, prevents duplicate starts on repeated clicks.
     var isBusy: Bool { busy }
     private let requestLock = NSLock()
@@ -311,16 +256,24 @@ final class MusicController {
             if seek { pendingSeek += action == "seek_forward" ? 1 : -1 }
             return
         }
-        let seekSeconds = Double(5 * max(1, steps)) * (action == "seek_forward" ? 1 : -1)
+        // One knob detent is one second, like one volume step.
+        let detentSeconds = Double(max(1, steps)) * (action == "seek_forward" ? 1 : -1)
         guard AXIsProcessTrusted() || musicAutomationPermission(service) == "allowed" else { status("Enable Accessibility for AK820 Pro Modder"); return }
         busy = true
         let request = beginRequest(), preferred = service, follow = followPlaying, youtube = youtubeBundle
         worker.async { [self] in
             guard isCurrent(request) else { return }
+            // Leftover detents count for 3 s and only in the same direction.
+            let now = ProcessInfo.processInfo.systemUptime
+            if now - seekCarryAt > 3 || seekCarry * detentSeconds < 0 { seekCarry = 0 }
+            seekCarryAt = now
+            let seekSeconds = seek ? detentSeconds + seekCarry : detentSeconds
+            if seek { seekCarry = 0 }
             if seek, let cache = seekCache, ProcessInfo.processInfo.systemUptime - cache.time < 3, !axRole(cache.surface.root).isEmpty,
                let app = NSRunningApplication.runningApplications(withBundleIdentifier: serviceBundle(cache.route, youtube: youtube)).first {
                 do {
-                    try seekSurface(cache.surface, by: seekSeconds, applicationPID: app.processIdentifier)
+                    seekCarry = seekSeconds - (try seekSurface(cache.surface, by: seekSeconds, applicationPID: app.processIdentifier))
+                    if abs(seekCarry) > 60 { seekCarry = 0 }
                     seekCache = (cache.route, cache.surface, ProcessInfo.processInfo.systemUptime)
                     finish("\(displayName(cache.route)): \(action)", request: request); return
                 } catch { seekCache = nil }
@@ -370,7 +323,8 @@ final class MusicController {
                     case "seek_forward", "seek_backward":
                         if nativeMusicBundle(route) != nil { throw MusicError.failed("Allow player control in Music settings") }
                         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundle).first else { throw MusicError.failed("The music app closed before seeking") }
-                        try seekSurface(surface, by: seekSeconds, applicationPID: app.processIdentifier)
+                        seekCarry = seekSeconds - (try seekSurface(surface, by: seekSeconds, applicationPID: app.processIdentifier))
+                        if abs(seekCarry) > 60 { seekCarry = 0 }
                         seekCache = (route, surface, ProcessInfo.processInfo.systemUptime)
                     default: throw MusicError.failed("Unknown music action")
                     }
@@ -462,7 +416,7 @@ final class MusicController {
                                     guard let surface = mediaSurface(root, service: "youtube_music") else { throw MusicError.failed("This player's seek control is unavailable") }
                                     if action == "next" { guard let button = surface.next else { throw MusicError.failed("Next track is unavailable in this player") }; try pressAX(button) }
                                     else if action == "previous" { guard let button = surface.previous else { throw MusicError.failed("Previous track is unavailable in this player") }; try pressAX(button) }
-                                    else { try seekSurface(surface, by: action == "seek_forward" ? 5 : -5, applicationPID: running.processIdentifier) }
+                                    else { try seekSurface(surface, by: action == "seek_forward" ? 10 : -10, applicationPID: running.processIdentifier) }
                                     finish("YouTube Music: \(action)", request: request)
                                 default: throw MusicError.failed("Unknown music action")
                                 }
@@ -537,6 +491,8 @@ func youtubeNowPlaying() -> [String: Any]? {
                 if let value = axAttribute(element, kAXValueAttribute) as? String { texts.append(value) }
             case "AXLink":
                 let name = axName(element); if !name.isEmpty { links.append(name) }
+            case kAXProgressIndicatorRole, kAXSliderRole:
+                if let value = (axAttribute(element, kAXValueAttribute) as? NSNumber)?.doubleValue { info["position"] = value }
             case kAXImageRole:
                 if cover == nil, let url = axAttribute(element, "AXURL") as? URL, ["googleusercontent", "ytimg"].contains(where: url.absoluteString.contains) { cover = url.absoluteString }
             default: break
@@ -568,3 +524,4 @@ func youtubeNowPlaying() -> [String: Any]? {
     info["debug_texts"] = Array(candidates.prefix(6))
     return info["title"] == nil ? nil : info
 }
+

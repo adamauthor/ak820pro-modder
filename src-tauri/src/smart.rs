@@ -21,7 +21,9 @@ struct Status {
     language: String,
     last_anime: Option<Instant>,
     rotation: usize,
-    last_track: Option<String>,
+    /// What the TFT shows now (scene id and, for music, the track).
+    shown_scene: Option<String>,
+    shown_track: Option<String>,
     /// The TFT shows a Pomodoro card that should be replaced when it ends.
     pomodoro_card: bool,
 }
@@ -97,12 +99,11 @@ impl Smart {
                 if ticks % 5 == 0 {
                     me.lighting.tick().await;
                 }
-                if ticks % 15 == 5 {
-                    me.track_check().await;
+                if ticks % 20 == 7 {
+                    me.anime_context().await;
                 }
                 if ticks % 60 == 2 {
                     me.battery_check().await;
-                    me.anime_auto().await;
                 }
                 ticks += 1;
             }
@@ -378,7 +379,7 @@ impl Smart {
         tauri::async_runtime::spawn(async move {
             let shown = std::mem::take(&mut me.status.lock().await.pomodoro_card);
             if shown && smart_lighting::usb_connected() {
-                if let Err(error) = me.anime_upload("daily").await {
+                if let Err(error) = me.upload_card("daily", true).await {
                     tracing::warn!(%error, "replacing the Pomodoro card");
                 }
             }
@@ -519,7 +520,15 @@ impl Smart {
         .map_err(|e| e.to_string())?
     }
     pub async fn anime_upload(&self, scene: &str) -> Result<(), String> {
-        let config = self.anime_config().await;
+        self.upload_card(scene, false).await
+    }
+    /// `automatic` cards are single-frame unless `auto_animated`, so the
+    /// lighting pause during the transfer stays short.
+    async fn upload_card(&self, scene: &str, automatic: bool) -> Result<(), String> {
+        let mut config = self.anime_config().await;
+        if automatic && !config.auto_animated {
+            config.animated = false;
+        }
         let youtube = self.youtube_playing(scene).await;
         let name = scene.to_string();
         let exclusive = self.lighting.begin_upload().await;
@@ -536,7 +545,9 @@ impl Smart {
         match &result {
             Ok(()) => {
                 tracing::info!(scene, "anime card uploaded");
-                self.status.lock().await.pomodoro_card = false;
+                let mut status = self.status.lock().await;
+                status.pomodoro_card = false;
+                status.shown_scene = Some(scene.to_string());
             }
             Err(error) => tracing::warn!(scene, %error, "anime card failed"),
         }
@@ -544,57 +555,91 @@ impl Smart {
         self.status.lock().await.last_anime = Some(Instant::now());
         Ok(())
     }
-    async fn anime_auto(&self) {
+    /// The playing track as "title|artist", from Music/Spotify or the
+    /// YouTube Music player bar; None when nothing plays.
+    async fn current_track(&self) -> Option<String> {
+        let local = tauri::async_runtime::spawn_blocking(crate::now_playing::fetch)
+            .await
+            .ok()
+            .flatten()
+            .filter(|p| p.is_playing);
+        if let Some(p) = local {
+            return Some(format!(
+                "{}|{}",
+                p.title.unwrap_or_default(),
+                p.artist.unwrap_or_default()
+            ));
+        }
+        let yt = self.youtube_playing("now_playing").await?;
+        (yt["is_playing"].as_bool() == Some(true)).then(|| {
+            format!(
+                "{}|{}",
+                yt["title"].as_str().unwrap_or_default(),
+                yt["artist"].as_str().unwrap_or_default()
+            )
+        })
+    }
+
+    /// Picks the card from what is happening: the current track while music
+    /// plays (checked every `music_minutes`), otherwise greeting and weather
+    /// taking turns every `ambient_minutes`. Pomodoro cards take precedence.
+    async fn anime_context(self: &Arc<Self>) {
         let config = self.anime_config().await;
         if !config.auto || !config.consent || !smart_lighting::usb_connected() {
             return;
         }
+        let pomodoro = self.pomodoro_config.lock().await.anime_screen
+            && self.timer.lock().await.phase != Phase::Idle;
+        if pomodoro {
+            return;
+        }
+        let music_allowed = config.rotation.iter().any(|s| s == "now_playing");
+        let track = if music_allowed {
+            self.current_track().await
+        } else {
+            None
+        };
+        let ambient: Vec<String> = config
+            .rotation
+            .iter()
+            .filter(|s| s.as_str() != "now_playing")
+            .cloned()
+            .collect();
         let scene = {
             let mut status = self.status.lock().await;
-            let due = status.last_anime.is_none_or(|t| {
-                t.elapsed() >= Duration::from_secs(u64::from(config.refresh_minutes) * 60)
-            });
-            if !due {
-                return;
+            let elapsed = status.last_anime.map(|t| t.elapsed());
+            let older = |minutes: u32| {
+                elapsed.is_none_or(|e| e >= Duration::from_secs(u64::from(minutes) * 60))
+            };
+            if let Some(track) = &track {
+                let showing_music = status.shown_scene.as_deref() == Some("now_playing");
+                let new_track = status.shown_track.as_deref() != Some(track.as_str());
+                if !showing_music || (new_track && older(config.music_minutes)) {
+                    status.shown_track = Some(track.clone());
+                    Some("now_playing".to_string())
+                } else {
+                    None
+                }
+            } else if ambient.is_empty() {
+                None
+            } else if status.shown_scene.as_deref() == Some("now_playing")
+                || older(config.ambient_minutes)
+            {
+                status.rotation = (status.rotation + 1) % ambient.len();
+                Some(ambient[status.rotation].clone())
+            } else {
+                None
             }
-            status.rotation = (status.rotation + 1) % config.rotation.len();
-            config.rotation[status.rotation].clone()
         };
-        if let Err(error) = self.anime_upload(&scene).await {
+        let Some(scene) = scene else {
+            return;
+        };
+        if let Err(error) = self.upload_card(&scene, true).await {
             tracing::warn!(%error, scene, "automatic anime card");
             // Do not hammer a failing source; try again next interval.
-            self.status.lock().await.last_anime = Some(Instant::now());
-        }
-    }
-    async fn track_check(&self) {
-        let config = self.anime_config().await;
-        if !config.on_track_change || !config.consent {
-            return;
-        }
-        let Ok(Some(playing)) =
-            tauri::async_runtime::spawn_blocking(crate::now_playing::fetch).await
-        else {
-            return;
-        };
-        if !playing.is_playing {
-            return;
-        }
-        let track = format!("{:?}|{:?}", playing.title, playing.artist);
-        let changed = {
             let mut status = self.status.lock().await;
-            let changed = status.last_track.as_deref() != Some(track.as_str());
-            let rested = status
-                .last_anime
-                .is_none_or(|t| t.elapsed() >= Duration::from_secs(5 * 60));
-            if changed {
-                status.last_track = Some(track);
-            }
-            changed && rested
-        };
-        if changed && smart_lighting::usb_connected() {
-            if let Err(error) = self.anime_upload("now_playing").await {
-                tracing::warn!(%error, "now-playing anime card");
-            }
+            status.last_anime = Some(Instant::now());
+            status.shown_track = None;
         }
     }
 

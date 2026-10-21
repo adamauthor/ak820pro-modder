@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 pub const CONFIG_FILE: &str = "anime-screen.json";
-pub const MIN_REFRESH_MINUTES: u32 = 15;
+pub const MIN_REFRESH_MINUTES: u32 = 10;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -23,11 +23,20 @@ pub struct AnimeConfig {
     /// Allows uploads that replace the keyboard's stored animation.
     pub consent: bool,
     pub auto: bool,
+    /// Kept for settings files from 0.9.0; see `ambient_minutes`.
     pub refresh_minutes: u32,
     /// Scenes cycled by the automatic refresh.
     pub rotation: Vec<String>,
-    /// Shows a new now-playing card when the track changes (rate limited).
+    /// Kept for settings files from 0.9.0; context mode replaced it.
     pub on_track_change: bool,
+    /// While music plays, how often the track is checked and the card
+    /// refreshed when it changed.
+    pub music_minutes: u32,
+    /// Without music, how often the greeting and weather cards alternate.
+    pub ambient_minutes: u32,
+    /// Animate automatic cards too. The keyboard's lighting pauses for the
+    /// whole transfer: about 1.5 s for one frame, 8 s for an animation.
+    pub auto_animated: bool,
 }
 
 impl Default for AnimeConfig {
@@ -39,17 +48,22 @@ impl Default for AnimeConfig {
             consent: false,
             auto: false,
             refresh_minutes: 60,
-            rotation: vec!["daily".into(), "weather".into()],
+            rotation: vec!["daily".into(), "weather".into(), "now_playing".into()],
             on_track_change: false,
+            music_minutes: 2,
+            ambient_minutes: 30,
+            auto_animated: false,
         }
     }
 }
 
 impl AnimeConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if self.refresh_minutes < MIN_REFRESH_MINUTES || self.refresh_minutes > 24 * 60 {
+        if !(1..=30).contains(&self.music_minutes)
+            || !(MIN_REFRESH_MINUTES..=240).contains(&self.ambient_minutes)
+        {
             return Err(format!(
-                "Refresh every {MIN_REFRESH_MINUTES}–1440 minutes to spare the keyboard's flash"
+                "Music check every 1–30 minutes, greeting/weather every {MIN_REFRESH_MINUTES}–240 minutes"
             ));
         }
         if self.city.chars().count() > 80
@@ -367,11 +381,18 @@ mod tests {
         config.validate().unwrap();
         assert!(!config.consent && !config.auto, "uploads are opt-in");
         assert!(AnimeConfig {
-            refresh_minutes: 5,
+            ambient_minutes: 5,
             ..config.clone()
         }
         .validate()
         .is_err());
+        assert!(AnimeConfig {
+            music_minutes: 0,
+            ..config.clone()
+        }
+        .validate()
+        .is_err());
+        assert_eq!(config.music_minutes, 2);
         assert!(AnimeConfig {
             rotation: vec!["shell".into()],
             ..config.clone()

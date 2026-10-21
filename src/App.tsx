@@ -159,7 +159,7 @@ export default function App() {
       {tab === "macros" && (hostKeyboard ? <HostMacros /> : capabilities && !capabilities.macros ? <UnavailableFeature name="Onboard macros" /> : <Macros />)}
       {tab === "smart" && <Smart />}
       {tab === "automations" && <Automations />}
-      {tab === "presets" && (wirelessOnly ? <UsbRequired /> : <Presets />)}
+      {tab === "presets" && <Presets />}
       {tab === "tft" && (wirelessOnly ? <UsbRequired /> : <Tft />)}
     </Layout></CapabilityContext.Provider></MacControlsContext.Provider>
   );

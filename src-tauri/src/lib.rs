@@ -842,163 +842,86 @@ fn list_presets() -> Vec<Preset> {
     presets::library()
 }
 
-/// Which parts of a preset to apply. Lets the user pick — e.g. take only
-/// the lighting from "Gaming FPS" but keep their custom keymap.
+/// Which parts of a preset to apply.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ApplyPresetOptions {
     pub lighting: bool,
-    pub keymap: bool,
-    pub fn_keymap: bool,
-    pub automations: bool,
+    pub smart: bool,
+    pub pomodoro: bool,
+    pub anime: bool,
+    pub knob: bool,
 }
 
-/// Result of an apply — what actually happened, surfaced to the UI.
+/// What was applied, and what was skipped with the reason.
 #[derive(Debug, Clone, Serialize, Default)]
 pub struct ApplyPresetReport {
-    pub lighting_applied: bool,
-    pub keymap_slots_changed: usize,
-    pub fn_keymap_slots_changed: usize,
-    pub automations_added: usize,
-    pub automations_skipped_existing: usize,
+    pub applied: Vec<&'static str>,
     pub warnings: Vec<String>,
 }
 
 #[tauri::command]
 async fn apply_preset(
     app: AppHandle,
-    state: State<'_, Arc<ConnState>>,
-    memory: State<'_, Arc<TftMemory>>,
+    smart: State<'_, Arc<Smart>>,
     id: String,
     options: ApplyPresetOptions,
-) -> Result<ApplyPresetReport, AppError> {
-    let preset =
-        presets::find(&id).ok_or_else(|| AppError::Protocol(format!("preset '{id}' not found")))?;
-    let capabilities = get_capabilities()?;
-    if (options.keymap && !capabilities.keymap && !preset.keymap_overrides.is_empty())
-        || (options.fn_keymap && !capabilities.fn_keymap && !preset.fn_keymap_overrides.is_empty())
-    {
-        return Err(AppError::Protocol(
-            "Onboard key remapping is not decoded for this firmware; no preset changes were sent"
-                .into(),
-        ));
-    }
+) -> Result<ApplyPresetReport, String> {
+    let preset = presets::find(&id).ok_or_else(|| format!("preset '{id}' not found"))?;
     let mut report = ApplyPresetReport::default();
-
-    // 1. Lighting — single SET_LED_EFFECT write, optional.
-    if options.lighting {
-        if let Some(cfg) = preset.lighting.as_ref() {
-            let cfg = cfg.clone();
-            state
-                .with(|slot| {
-                    let conn = ensure_open(slot)?;
-                    conn.set_lighting(&cfg)?;
-                    Ok(())
-                })
-                .await?;
-            report.lighting_applied = true;
-            if let Some(smart) = app.try_state::<Arc<Smart>>() {
-                smart.lighting.set_base(&cfg).await;
+    if let Some(lighting) = preset.lighting.clone().filter(|_| options.lighting) {
+        // Saved as "your lighting" even without USB; it is drawn on reconnect.
+        if smart_lighting::usb_connected() {
+            match smart.lighting.apply_base(lighting).await {
+                Ok(()) => report.applied.push("lighting"),
+                Err(error) => report.warnings.push(format!("Lighting: {error:?}")),
             }
+        } else {
+            smart.lighting.set_base(&lighting).await;
+            report.applied.push("lighting");
+            report
+                .warnings
+                .push("Lighting saved; it is shown when the keyboard is connected by USB".into());
         }
     }
-
-    // 2. Base-layer keymap overrides — read-modify-write the existing
-    // 128-slot keymap so unchanged slots stay untouched.
-    if options.keymap && !preset.keymap_overrides.is_empty() {
-        let overrides = preset.keymap_overrides.clone();
-        let changed = state
-            .with(|slot| {
-                let conn = ensure_open(slot)?;
-                let mut km = conn.get_keymap()?;
-                let mut changed = 0usize;
-                for (s, action) in &overrides {
-                    let i = *s as usize;
-                    if i < km.slots.len() && km.slots[i] != *action {
-                        km.slots[i] = action.clone();
-                        changed += 1;
-                    }
-                }
-                if changed > 0 {
-                    conn.set_keymap(&km)?;
-                }
-                Ok(changed)
-            })
-            .await?;
-        report.keymap_slots_changed = changed;
+    if let Some(patch) = preset.smart.as_ref().filter(|_| options.smart) {
+        let config = presets::patch_smart(smart.lighting.config().await, patch);
+        smart.inner().save_smart(config).await?;
+        report.applied.push("smart");
     }
-
-    // 3. Fn-layer keymap overrides.
-    if options.fn_keymap && !preset.fn_keymap_overrides.is_empty() {
-        let overrides = preset.fn_keymap_overrides.clone();
-        let changed = state
-            .with(|slot| {
-                let conn = ensure_open(slot)?;
-                let mut km = conn.get_fn_keymap()?;
-                let mut changed = 0usize;
-                for (s, action) in &overrides {
-                    let i = *s as usize;
-                    if i < km.slots.len() && km.slots[i] != *action {
-                        km.slots[i] = action.clone();
-                        changed += 1;
-                    }
-                }
-                if changed > 0 {
-                    conn.set_fn_keymap(&km)?;
-                }
-                Ok(changed)
-            })
+    if let Some(pomodoro) = preset.pomodoro.clone().filter(|_| options.pomodoro) {
+        let color = smart.pomodoro_status().await.1.color;
+        smart
+            .save_pomodoro(pomodoro::PomodoroConfig { color, ..pomodoro })
             .await?;
-        report.fn_keymap_slots_changed = changed;
+        report.applied.push("pomodoro");
     }
-
-    // 4. Automation seeds — add to the user's library, skip names that
-    // are already present (no destructive overwrite).
-    if options.automations {
-        let seeds = presets::seeds_for(&preset);
-        if !seeds.is_empty() {
-            let dir = app
-                .path()
-                .app_data_dir()
-                .map_err(|e| AppError::Protocol(format!("app_data_dir: {e}")))?;
-            let dir_clone = dir.clone();
-            let added = tokio::task::spawn_blocking(move || -> Result<(usize, usize), String> {
-                let mut list = automations::load(dir_clone.clone())?;
-                let mut added = 0usize;
-                let mut skipped = 0usize;
-                for s in &seeds {
-                    if list.iter().any(|a| a.name == s.name) {
-                        skipped += 1;
-                        continue;
-                    }
-                    let now = unix_millis();
-                    list.push(automations::Automation {
-                        id: now as u64 + added as u64,
-                        name: s.name.into(),
-                        description: s.description.into(),
-                        kind: s.kind,
-                        payload: s.payload.into(),
-                        created_at: now,
-                        updated_at: now,
-                        marker_hid: None,
-                    });
-                    added += 1;
-                }
-                automations::save(dir_clone, &list)?;
-                Ok((added, skipped))
-            })
-            .await
-            .map_err(|e| AppError::Protocol(format!("join: {e}")))?
-            .map_err(AppError::Protocol)?;
-            report.automations_added = added.0;
-            report.automations_skipped_existing = added.1;
+    if let Some(patch) = preset.anime.as_ref().filter(|_| options.anime) {
+        let current = smart.anime_config().await;
+        if patch.auto && !current.consent {
+            report.warnings.push(
+                "Automatic cards stay off until uploads are allowed in Smart features".into(),
+            );
         }
+        smart
+            .save_anime(presets::patch_anime(current, patch))
+            .await?;
+        report.applied.push("anime");
     }
-
-    // Cross-cutting presets potentially touch lighting + keymap +
-    // macros, any of which the firmware may treat as TFT-resetting.
-    // The restore is cheap when memory is empty.
-    restore_tft_quietly(memory.inner().clone()).await;
-
+    if let Some(bindings) = preset.knob.clone().filter(|_| options.knob) {
+        let mut config = mac_controls::config(&app);
+        config.bindings = bindings;
+        if !matches!(
+            config.knob_mode,
+            mac_controls::KnobMode::YoutubeMusic | mac_controls::KnobMode::Smart
+        ) {
+            report
+                .warnings
+                .push("Knob gestures need the YouTube Music or custom-gestures knob mode".into());
+        }
+        mac_controls::save(&app, config).await?;
+        report.applied.push("knob");
+    }
+    tracing::info!(preset = %id, applied = ?report.applied, "preset applied");
     Ok(report)
 }
 

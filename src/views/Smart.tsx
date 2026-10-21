@@ -59,6 +59,9 @@ interface AnimeConfig {
   refresh_minutes: number;
   rotation: string[];
   on_track_change: boolean;
+  music_minutes: number;
+  ambient_minutes: number;
+  auto_animated: boolean;
 }
 
 const lighting = (color: string, mode = "static", brightness = 4): Lighting => ({
@@ -268,12 +271,15 @@ export function Smart() {
             <input className={INPUT} value={anime.city} placeholder={t("Your time-zone city", "Город часового пояса")} onChange={e => setAnime({ ...anime, city: e.target.value })} /></label>
           <Toggle checked={anime.animated} onChange={v => setAnime({ ...anime, animated: v })}>{t("Animated (blinking, petals, rain)", "Анимация (моргание, лепестки, дождь)")}</Toggle>
           <Toggle checked={anime.consent} onChange={v => setAnime({ ...anime, consent: v })}>{t("Allow uploads that replace the keyboard's stored animation", "Разрешить загрузки, заменяющие сохранённую анимацию клавиатуры")}</Toggle>
-          <Toggle checked={anime.auto} disabled={!anime.consent} onChange={v => setAnime({ ...anime, auto: v })}>{t("Refresh automatically", "Обновлять автоматически")}</Toggle>
-          <NumberInput label={t("Every, min (15+)", "Каждые, мин (от 15)")} min={15} max={1440} value={anime.refresh_minutes} onChange={v => setAnime({ ...anime, refresh_minutes: v })} />
+          <Toggle checked={anime.auto} disabled={!anime.consent} onChange={v => setAnime({ ...anime, auto: v })}>{t("Change cards by context", "Менять открытки по контексту")}</Toggle>
+          <p className="text-xs text-fg-3">{t("Music playing → “Now playing”, refreshed when the track changes. No music → greeting and weather take turns. Pomodoro cards come first while the timer runs.",
+            "Играет музыка → «Сейчас играет», обновляется при смене трека. Музыки нет → открытка дня и погода по очереди. Пока идёт помодоро, показывается его открытка.")}</p>
+          <NumberInput label={t("Check the track every, min", "Проверять трек каждые, мин")} min={1} max={30} value={anime.music_minutes} onChange={v => setAnime({ ...anime, music_minutes: v })} />
+          <Toggle checked={anime.auto_animated} disabled={!anime.consent} onChange={v => setAnime({ ...anime, auto_animated: v })}>{t("Animate automatic cards (lighting pauses ~8 s instead of ~1.5 s)", "Анимировать автоматические открытки (подсветка замирает ~8 с вместо ~1,5 с)")}</Toggle>
+          <NumberInput label={t("Greeting / weather every, min", "Открытка дня / погода каждые, мин")} min={10} max={240} value={anime.ambient_minutes} onChange={v => setAnime({ ...anime, ambient_minutes: v })} />
           <div className="flex flex-wrap gap-4 text-sm">{Object.entries(sceneNames()).map(([id, name]) =>
             <label key={id} className="flex items-center gap-2"><input type="checkbox" checked={anime.rotation.includes(id)}
               onChange={e => setAnime({ ...anime, rotation: e.target.checked ? [...anime.rotation, id] : anime.rotation.filter(x => x !== id) })} />{name}</label>)}</div>
-          <Toggle checked={anime.on_track_change} disabled={!anime.consent} onChange={v => setAnime({ ...anime, on_track_change: v })}>{t("New card when the track changes (at most every 5 min)", "Новая открытка при смене трека (не чаще раза в 5 минут)")}</Toggle>
           <p className="text-xs text-fg-3">{t("Each upload rewrites the keyboard's flash, so automatic refreshes are limited. Weather comes from Open-Meteo; only the city name is sent.",
             "Каждая загрузка перезаписывает флеш-память клавиатуры, поэтому автообновление ограничено. Погода — от Open-Meteo, передаётся только название города.")}</p>
         </div>

@@ -76,6 +76,12 @@ export const russian: Record<string, string> = {
   System: "Система",
   "Mac controls": "Управление на Mac",
   "Smart features": "Умные функции",
+  "Lighting saved; it is shown when the keyboard is connected by USB":
+    "Подсветка сохранена и включится, когда клавиатура будет подключена по USB",
+  "Automatic cards stay off until uploads are allowed in Smart features":
+    "Автоматические открытки выключены, пока загрузка не разрешена в «Умных функциях»",
+  "Knob gestures need the YouTube Music or custom-gestures knob mode":
+    "Жесты колёсика работают в режиме YouTube Music или «Свои жесты»",
   Keymap: "Клавиши",
   Macros: "Макросы",
   Automations: "Автоматизации",

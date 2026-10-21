@@ -1,315 +1,87 @@
-import { t } from "../i18n";
-/**
- * Presets view — curated cross-cutting profiles (lighting + keymap
- * overrides + automation seeds) for common use-cases like FPS gaming,
- * dev workflows, office days.
- *
- * Apply flow:
- *   1. User picks a preset card.
- *   2. Modal opens with per-component toggles (lighting / keymap / fn /
- *      automations) so the user can take just the parts they want.
- *   3. Confirm → backend executes via `apply_preset` and returns a report.
- *   4. Report is rendered inline so the user sees exactly what changed.
- *
- * Applying is **additive**: it patches the current state, doesn't wipe
- * anything first. Keymap overrides only touch the listed slots — the
- * user's other remaps survive. Automation seeds are skipped if a same-
- * named entry already exists in the user's library.
- */
-
-import { useEffect, useMemo, useState } from "react";
-import { useCapabilities } from "../capabilities";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Badge, Button, Card, ErrorBanner } from "../components/ui";
 import { PageHeader } from "../components/Layout";
-import type {
-  ApplyPresetOptions,
-  ApplyPresetReport,
-  Preset,
-} from "../types";
 import { formatError } from "../errors";
+import { t, useI18n } from "../i18n";
 
+type Part = "lighting" | "smart" | "pomodoro" | "anime" | "knob";
+interface Preset {
+  id: string;
+  icon: string;
+  name: string;
+  name_ru: string;
+  description: string;
+  description_ru: string;
+  lighting: { color: string; mode: string } | null;
+  smart: unknown | null;
+  pomodoro: { focus_minutes: number; short_break_minutes: number } | null;
+  anime: { character: string } | null;
+  knob: { single: string; double: string; triple: string } | null;
+}
+interface Report { applied: Part[]; warnings: string[] }
+
+const PARTS: [Part, () => string][] = [
+  ["lighting", () => t("Lighting", "Подсветка")],
+  ["smart", () => t("Smart lighting", "Умная подсветка")],
+  ["pomodoro", () => t("Pomodoro", "Помодоро")],
+  ["anime", () => t("Anime screen", "Аниме-экран")],
+  ["knob", () => t("Knob", "Колёсико")],
+];
+
+/** One-click setups that combine lighting, smart lighting, Pomodoro, the
+ *  anime screen and knob gestures. Each part can be left out. */
 export function Presets() {
-  const [presets, setPresets] = useState<Preset[] | null>(null);
-  const [activeCategory, setActiveCategory] = useState<string>("All");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [reviewing, setReviewing] = useState<Preset | null>(null);
-  const [lastReport, setLastReport] = useState<{ preset: Preset; report: ApplyPresetReport } | null>(null);
+  const { language } = useI18n();
+  const ru = language === "ru";
+  const [presets, setPresets] = useState<Preset[]>([]);
+  const [selected, setSelected] = useState<Record<string, Record<Part, boolean>>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [report, setReport] = useState<{ id: string; report: Report } | null>(null);
 
   useEffect(() => {
     invoke<Preset[]>("list_presets")
-      .then(setPresets)
-      .catch((e) => setErr(formatError(e)));
+      .then(list => {
+        setPresets(list);
+        setSelected(Object.fromEntries(list.map(p => [p.id, Object.fromEntries(PARTS.map(([part]) => [part, p[part] !== null])) as Record<Part, boolean>])));
+      })
+      .catch(e => setError(formatError(e)));
   }, []);
 
-  const categories = useMemo(() => {
-    if (!presets) return ["All"];
-    const set = new Set(presets.map((p) => p.category));
-    return ["All", ...Array.from(set)];
-  }, [presets]);
-
-  const visible = useMemo(() => {
-    if (!presets) return [];
-    if (activeCategory === "All") return presets;
-    return presets.filter((p) => p.category === activeCategory);
-  }, [presets, activeCategory]);
-
-  async function commit(preset: Preset, opts: ApplyPresetOptions) {
-    setBusy(true);
-    setErr(null);
+  async function apply(preset: Preset) {
+    setBusy(preset.id); setError(null); setReport(null);
     try {
-      const report = await invoke<ApplyPresetReport>("apply_preset", {
-        id: preset.id,
-        options: opts,
-      });
-      setLastReport({ preset, report });
-      setReviewing(null);
-    } catch (e) {
-      setErr(formatError(e));
-    } finally {
-      setBusy(false);
-    }
+      const result = await invoke<Report>("apply_preset", { id: preset.id, options: selected[preset.id] });
+      setReport({ id: preset.id, report: result });
+      window.dispatchEvent(new Event("mac-controls-updated"));
+    } catch (e) { setError(formatError(e)); }
+    finally { setBusy(null); }
   }
 
-  return (
-    <>
-      <PageHeader
-        title={t("Presets")}
-        description={t("One-click cross-cutting profiles. Each preset patches lighting, key remaps, and seeds the Automations library for a specific use case. Applied additively — your other settings are preserved.")}
-      />
-
-      <ErrorBanner>{err}</ErrorBanner>
-
-      {lastReport && <ReportBanner report={lastReport.report} preset={lastReport.preset} onDismiss={() => setLastReport(null)} />}
-
-      {presets === null ? (
-        <p className="text-sm text-fg-2">{t("Loading presets…")}</p>
-      ) : (
-        <>
-          <div className="mb-5 flex flex-wrap gap-2">
-            {categories.map((c) => (
-              <Button
-                key={c}
-                size="sm"
-                variant={activeCategory === c ? "ghost-active" : "ghost"}
-                onClick={() => setActiveCategory(c)}
-              >
-                {c}
-              </Button>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-            {visible.map((p) => (
-              <PresetCard key={p.id} preset={p} onPick={() => setReviewing(p)} disabled={busy} />
-            ))}
-          </div>
-        </>
-      )}
-
-      {reviewing && (
-        <ApplyModal
-          preset={reviewing}
-          busy={busy}
-          onCancel={() => setReviewing(null)}
-          onApply={(opts) => void commit(reviewing, opts)}
-        />
-      )}
-    </>
-  );
-}
-
-/* ---------------------------------------------------- card -- */
-
-function PresetCard({
-  preset,
-  onPick,
-  disabled,
-}: {
-  preset: Preset;
-  onPick: () => void;
-  disabled: boolean;
-}) {
-  const componentBadges: string[] = [];
-  if (preset.lighting) componentBadges.push("Lighting");
-  if (preset.keymap_overrides.length > 0) componentBadges.push(`Keymap (${preset.keymap_overrides.length})`);
-  if (preset.fn_keymap_overrides.length > 0) componentBadges.push(`Fn (${preset.fn_keymap_overrides.length})`);
-  if (preset.automation_seeds.length > 0) componentBadges.push(`Automations (${preset.automation_seeds.length})`);
-
-  return (
-    <Card>
-      <div className="flex items-start gap-3">
-        <span className="text-2xl" aria-hidden>{preset.icon}</span>
-        <div className="min-w-0 flex-1">
-          <div className="mb-1 flex items-baseline gap-2">
-            <h3 className="truncate text-base font-medium text-fg-0">{preset.name}</h3>
-            <Badge tone="neutral">{preset.category}</Badge>
-          </div>
-          <p className="mb-3 text-sm text-fg-2">{preset.description}</p>
-          <div className="mb-3 flex flex-wrap gap-1.5">
-            {componentBadges.map((b) => (
-              <span key={b} className="rounded-sm border border-line/60 bg-surface-base px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-fg-3">
-                {b}
-              </span>
-            ))}
-          </div>
-          <Button size="sm" variant="primary" onClick={onPick} disabled={disabled}>{" "}{t("Review & apply")}{" "}</Button>
+  return <div className="space-y-5">
+    <PageHeader title={t("Presets", "Пресеты")}
+      description={t("Set the keyboard up for a situation in one click. Your city, upload permission, music service, app profiles and key mappings are never changed.",
+        "Настройка под ситуацию одним кликом. Город, разрешение на загрузку картинок, музыкальный сервис, профили приложений и переназначения клавиш не меняются.")} />
+    <ErrorBanner>{error}</ErrorBanner>
+    <div className="grid gap-4 md:grid-cols-2">
+      {presets.map(preset => <Card key={preset.id} title={<span className="flex items-center gap-2"><span className="text-xl">{preset.icon}</span>{ru ? preset.name_ru : preset.name}</span>}
+        action={preset.lighting && <span className="inline-block h-4 w-4 rounded-full border border-line" style={{ background: `#${preset.lighting.color}` }} />}>
+        <p className="mb-4 text-sm text-fg-2">{ru ? preset.description_ru : preset.description}</p>
+        <div className="mb-4 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+          {PARTS.filter(([part]) => preset[part] !== null).map(([part, label]) => <label key={part} className="flex items-center gap-2">
+            <input type="checkbox" checked={selected[preset.id]?.[part] ?? false}
+              onChange={e => setSelected({ ...selected, [preset.id]: { ...selected[preset.id], [part]: e.target.checked } })} />{label()}
+          </label>)}
         </div>
-      </div>
-    </Card>
-  );
-}
-
-/* ---------------------------------------------------- apply modal -- */
-
-function ApplyModal({
-  preset,
-  busy,
-  onCancel,
-  onApply,
-}: {
-  preset: Preset;
-  busy: boolean;
-  onCancel: () => void;
-  onApply: (opts: ApplyPresetOptions) => void;
-}) {
-  const caps = useCapabilities();
-  const keymapAvailable = caps?.keymap !== false;
-  const [opts, setOpts] = useState<ApplyPresetOptions>({
-    lighting: preset.lighting !== null,
-    keymap: keymapAvailable && preset.keymap_overrides.length > 0,
-    fn_keymap: keymapAvailable && preset.fn_keymap_overrides.length > 0,
-    automations: preset.automation_seeds.length > 0,
-  });
-  const nothingPicked = !opts.lighting && !opts.keymap && !opts.fn_keymap && !opts.automations;
-
-  return (
-    <div
-      role="dialog"
-      aria-modal
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 px-4 py-8"
-      onClick={onCancel}
-    >
-      <div
-        className="w-full max-w-lg rounded-lg border border-line bg-surface-elevated shadow-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <header className="border-b border-line px-5 pb-3 pt-4">
-          <div className="flex items-baseline gap-2">
-            <span className="text-xl">{preset.icon}</span>
-            <h2 className="text-base font-medium text-fg-0">{t("Apply:")}{" "}{preset.name}</h2>
-          </div>
-          <p className="mt-1 text-xs text-fg-3">{preset.description}</p>
-        </header>
-
-        <div className="space-y-3 px-5 py-4">
-          <p className="text-xs text-fg-2">{t("Pick what to apply — unchecked parts of your keyboard stay untouched.")}</p>
-          <Option
-            label="Lighting"
-            available={preset.lighting !== null}
-            checked={opts.lighting}
-            onToggle={(v) => setOpts({ ...opts, lighting: v })}
-            detail={preset.lighting ? `Mode ${preset.lighting.mode}, #${preset.lighting.color}, brightness ${preset.lighting.brightness}/5` : "Preset doesn't define lighting"}
-          />
-          <Option
-            label="Base-layer key overrides"
-            available={keymapAvailable && preset.keymap_overrides.length > 0}
-            checked={opts.keymap}
-            onToggle={(v) => setOpts({ ...opts, keymap: v })}
-            detail={!keymapAvailable ? "Not supported by this keyboard revision" : preset.keymap_overrides.length > 0 ? `${preset.keymap_overrides.length} slot(s) will be patched. Unchanged slots stay as they are.` : "Preset doesn't change base-layer keys"}
-          />
-          <Option
-            label="Fn-layer key overrides"
-            available={keymapAvailable && preset.fn_keymap_overrides.length > 0}
-            checked={opts.fn_keymap}
-            onToggle={(v) => setOpts({ ...opts, fn_keymap: v })}
-            detail={!keymapAvailable ? "Not supported by this keyboard revision" : preset.fn_keymap_overrides.length > 0 ? `${preset.fn_keymap_overrides.length} slot(s) will be patched on the Fn layer.` : "Preset doesn't change Fn-layer keys"}
-          />
-          <Option
-            label="Add automations"
-            available={preset.automation_seeds.length > 0}
-            checked={opts.automations}
-            onToggle={(v) => setOpts({ ...opts, automations: v })}
-            detail={preset.automation_seeds.length > 0 ? `Adds ${preset.automation_seeds.length} entry/entries to your Automations library. Existing entries with the same name are kept (no overwrite).` : "Preset doesn't seed automations"}
-          />
-        </div>
-
-        <footer className="flex items-center justify-end gap-2 border-t border-line px-5 py-3">
-          <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>{" "}{t("Cancel")}{" "}</Button>
-          <Button size="sm" variant="primary" onClick={() => onApply(opts)} disabled={busy || nothingPicked}>
-            {busy ? "Applying…" : "Apply"}
-          </Button>
-        </footer>
-      </div>
+        <Button variant="primary" disabled={busy !== null || !Object.values(selected[preset.id] ?? {}).some(Boolean)} onClick={() => void apply(preset)}>
+          {busy === preset.id ? t("Applying…", "Применяем…") : t("Apply", "Применить")}</Button>
+        {report?.id === preset.id && <div className="mt-3 space-y-1 text-sm">
+          <p className="text-good">{t("Applied", "Применено")}: {report.report.applied.map(part => PARTS.find(([p]) => p === part)?.[1]()).join(", ") || "—"}</p>
+          {report.report.warnings.map(w => <p key={w} className="text-warn">{t(w)}</p>)}
+        </div>}
+        {preset.knob?.single.includes("mute") && <Badge tone="warn" className="mt-3">{t("Click mutes the microphone", "Клик выключает микрофон")}</Badge>}
+      </Card>)}
     </div>
-  );
-}
-
-function Option({
-  label,
-  available,
-  checked,
-  detail,
-  onToggle,
-}: {
-  label: string;
-  available: boolean;
-  checked: boolean;
-  detail: string;
-  onToggle: (v: boolean) => void;
-}) {
-  return (
-    <label
-      className={[
-        "flex cursor-pointer items-start gap-3 rounded-md border px-3 py-2",
-        available ? "border-line bg-surface-base hover:border-line-strong" : "border-line/40 bg-surface-base/40 opacity-50",
-      ].join(" ")}
-    >
-      <input
-        type="checkbox"
-        checked={available && checked}
-        disabled={!available}
-        onChange={(e) => onToggle(e.target.checked)}
-        className="mt-0.5 h-4 w-4 accent-accent-500"
-      />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-fg-0">{label}</p>
-        <p className="mt-0.5 text-xs text-fg-3">{detail}</p>
-      </div>
-    </label>
-  );
-}
-
-/* ---------------------------------------------------- report -- */
-
-function ReportBanner({
-  report,
-  preset,
-  onDismiss,
-}: {
-  report: ApplyPresetReport;
-  preset: Preset;
-  onDismiss: () => void;
-}) {
-  const parts: string[] = [];
-  if (report.lighting_applied) parts.push("lighting applied");
-  if (report.keymap_slots_changed > 0) parts.push(`${report.keymap_slots_changed} base-layer key${report.keymap_slots_changed === 1 ? "" : "s"} remapped`);
-  if (report.fn_keymap_slots_changed > 0) parts.push(`${report.fn_keymap_slots_changed} Fn-layer key${report.fn_keymap_slots_changed === 1 ? "" : "s"} remapped`);
-  if (report.automations_added > 0) parts.push(`${report.automations_added} automation${report.automations_added === 1 ? "" : "s"} added`);
-  if (report.automations_skipped_existing > 0) parts.push(`${report.automations_skipped_existing} automation${report.automations_skipped_existing === 1 ? "" : "s"} skipped (already present)`);
-  const summary = parts.length === 0 ? "Nothing applied (none of the components were selected)." : parts.join(", ") + ".";
-
-  return (
-    <div className="mb-4 flex items-start gap-3 rounded-md border border-good/40 bg-good/10 px-3 py-2">
-      <span className="text-lg" aria-hidden>{preset.icon}</span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-fg-0">{t("Applied:")}{" "}{preset.name}</p>
-        <p className="mt-0.5 text-xs text-fg-2">{summary}</p>
-      </div>
-      <button onClick={onDismiss} className="shrink-0 text-fg-3 hover:text-fg-0" aria-label={t("Dismiss")}>
-        ✕
-      </button>
-    </div>
-  );
+  </div>;
 }

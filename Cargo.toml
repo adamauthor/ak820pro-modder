@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.9.2-macos.1"
+version = "0.9.3-macos.1"
 edition = "2021"
 authors = ["wsclx"]
 license = "MIT"
