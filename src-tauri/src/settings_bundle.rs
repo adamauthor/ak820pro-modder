@@ -12,16 +12,17 @@ pub const VERSION: u32 = 1;
 pub const ICLOUD_NAME: &str = "settings-bundle.json";
 
 /// Settings files included in a bundle.
-pub const FILES: [&str; 8] = [
+pub const FILES: [&str; 5] = [
     "mac-controls.json",
     "host-macros.json",
     "automations.json",
-    crate::smart_lighting::CONFIG_FILE,
-    crate::smart_lighting::BASE_FILE,
-    crate::pomodoro::CONFIG_FILE,
-    crate::anime_screen::CONFIG_FILE,
+    crate::base_lighting::BASE_FILE,
     crate::colour_profiles::FILE,
 ];
+
+/// Files of features removed in 0.9.7. Older bundles may contain them;
+/// they are accepted and skipped instead of rejecting the whole bundle.
+const REMOVED_FILES: [&str; 3] = ["smart-lighting.json", "pomodoro.json", "anime-screen.json"];
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Bundle {
@@ -64,18 +65,10 @@ pub fn validate(bundle: &Bundle) -> Result<(), String> {
             "mac-controls.json" => drop(check::<crate::mac_controls::Config>(name, value)?),
             "host-macros.json" => crate::host_keyboard::validate(&check(name, value)?)?,
             "automations.json" => drop(check::<Vec<crate::automations::Automation>>(name, value)?),
-            crate::smart_lighting::CONFIG_FILE => {
-                check::<crate::smart_lighting::SmartConfig>(name, value)?.validate()?
-            }
-            crate::smart_lighting::BASE_FILE => drop(check::<
+            crate::base_lighting::BASE_FILE => drop(check::<
                 Option<ak820_protocol::commands::lighting::LightingConfig>,
             >(name, value)?),
-            crate::pomodoro::CONFIG_FILE => {
-                check::<crate::pomodoro::PomodoroConfig>(name, value)?.validate()?
-            }
-            crate::anime_screen::CONFIG_FILE => {
-                check::<crate::anime_screen::AnimeConfig>(name, value)?.validate()?
-            }
+            removed if REMOVED_FILES.contains(&removed) => {}
             crate::colour_profiles::FILE => {
                 check::<crate::colour_profiles::Store>(name, value)?.validate()?
             }
@@ -90,7 +83,9 @@ pub fn validate(bundle: &Bundle) -> Result<(), String> {
 pub fn write(dir: &Path, bundle: &Bundle) -> Result<(), String> {
     validate(bundle)?;
     for (name, value) in &bundle.files {
-        crate::json_store::save(dir, name, value)?;
+        if !REMOVED_FILES.contains(&name.as_str()) {
+            crate::json_store::save(dir, name, value)?;
+        }
     }
     Ok(())
 }
@@ -104,16 +99,20 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("ak820-bundle-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("pomodoro.json"), br#"{"focus_minutes":30}"#).unwrap();
         std::fs::write(dir.join("mac-controls.json"), br#"{"knob_mode":"smart"}"#).unwrap();
-        let bundle = export(&dir, 1).unwrap();
-        assert_eq!(bundle.files.len(), 2);
+        std::fs::write(dir.join("pomodoro.json"), br#"{"focus_minutes":30}"#).unwrap();
+        let mut bundle = export(&dir, 1).unwrap();
+        assert_eq!(bundle.files.len(), 1, "removed features are not exported");
+        // A bundle from an older version still imports, minus removed files.
+        bundle.files.insert(
+            "pomodoro.json".into(),
+            serde_json::json!({"focus_minutes": 30}),
+        );
         validate(&bundle).unwrap();
         let target = dir.join("restored");
         write(&target, &bundle).unwrap();
-        let restored: crate::pomodoro::PomodoroConfig =
-            crate::json_store::load(&target, "pomodoro.json");
-        assert_eq!(restored.focus_minutes, 30);
+        assert!(target.join("mac-controls.json").exists());
+        assert!(!target.join("pomodoro.json").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -126,8 +125,8 @@ mod tests {
             files: BTreeMap::new(),
         };
         bundle.files.insert(
-            "pomodoro.json".into(),
-            serde_json::json!({"focus_minutes": 0}),
+            "lighting-state.json".into(),
+            serde_json::json!({"mode": "nope"}),
         );
         assert!(validate(&bundle).is_err());
         bundle.files.clear();

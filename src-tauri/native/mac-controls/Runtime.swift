@@ -24,8 +24,8 @@ final class NativeFileLock {
 let showSettingsNotification = Notification.Name("io.github.wsclx.ak820pro-modder.show-settings")
 let commandNotification = Notification.Name("io.github.wsclx.ak820pro-modder.command")
 
-/// `--command group:value` (e.g. `pomodoro:start`, `anime:now_playing`,
-/// `lighting:off`, `test:telegram`) for Shortcuts and scripts.
+/// `--command group:value` (e.g. `lighting:off`, `lighting:restore`,
+/// `colour_profile:Work`, `knob_mode:smart`) for Shortcuts and scripts.
 func launchCommand(_ arguments: [String] = CommandLine.arguments) -> String? {
     guard let index = arguments.firstIndex(of: "--command"), index + 1 < arguments.count else { return nil }
     let command = arguments[index + 1]

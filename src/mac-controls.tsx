@@ -7,7 +7,6 @@ export type ClickAction =
   | "open"
   | "mute"
   | "mic_mute"
-  | "pomodoro"
   | "none";
 export type TurnAction =
   | "volume"

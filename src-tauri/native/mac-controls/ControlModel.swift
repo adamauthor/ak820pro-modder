@@ -64,7 +64,7 @@ struct ControlConfig: Codable, Equatable {
 }
 
 // Mute actions are available but never chosen by default.
-let clickActions = ["toggle", "next", "previous", "open", "mute", "mic_mute", "pomodoro", "none"]
+let clickActions = ["toggle", "next", "previous", "open", "mute", "mic_mute", "none"]
 
 // Monotonic timestamps make the boundary deterministic in fixtures and immune to clock changes.
 struct ClickSequence {

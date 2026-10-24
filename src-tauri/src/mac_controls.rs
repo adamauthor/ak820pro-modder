@@ -22,6 +22,20 @@ pub struct Bindings {
     pub rotation: String,
     pub shift_rotation: String,
 }
+impl Bindings {
+    /// The Pomodoro click action was removed in 0.9.7; old settings that
+    /// still name it would fail the native validation.
+    fn drop_removed_actions(&mut self) -> bool {
+        let mut changed = false;
+        for action in [&mut self.single, &mut self.double, &mut self.triple] {
+            if action == "pomodoro" {
+                *action = "none".into();
+                changed = true;
+            }
+        }
+        changed
+    }
+}
 impl Default for Bindings {
     fn default() -> Self {
         Self {
@@ -101,8 +115,20 @@ fn read_config(path: &Path) -> Result<Config, String> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("Invalid Mac controls configuration: {e}"))
+    let mut config: Config =
+        serde_json::from_slice(&std::fs::read(path).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Invalid Mac controls configuration: {e}"))?;
+    config.drop_removed_actions();
+    Ok(config)
+}
+impl Config {
+    fn drop_removed_actions(&mut self) -> bool {
+        let mut changed = self.bindings.drop_removed_actions();
+        for profile in &mut self.profiles {
+            changed |= profile.bindings.drop_removed_actions();
+        }
+        changed
+    }
 }
 fn write_config(path: &Path, config: &Config) -> Result<(), String> {
     std::fs::create_dir_all(path.parent().ok_or("Invalid config path")?)
@@ -125,7 +151,11 @@ fn configure_request(app: &AppHandle, config: &Config) -> Result<Value, String> 
 pub fn initialize(app: &AppHandle) -> Result<(), String> {
     let mut config = read_config(&config_path(app)?)?;
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
-    if migrate_remap_backups(&dir, &mut config)? {
+    let raw: Option<Config> = std::fs::read(config_path(app)?)
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok());
+    let actions_dropped = raw.is_some_and(|r| r != config);
+    if migrate_remap_backups(&dir, &mut config)? || actions_dropped {
         write_config(&config_path(app)?, &config)?;
     }
     *app.state::<State>()
@@ -304,7 +334,8 @@ pub async fn mac_controls_save(app: AppHandle, config: Config) -> Result<Value, 
     save(&app, config).await
 }
 /// Validates, applies and persists a configuration; rolls back on failure.
-pub async fn save(app: &AppHandle, config: Config) -> Result<Value, String> {
+pub async fn save(app: &AppHandle, mut config: Config) -> Result<Value, String> {
+    config.drop_removed_actions();
     let app = app.clone();
     let state = app.state::<State>();
     let _guard = state.save_lock.lock().await;

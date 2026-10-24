@@ -42,7 +42,6 @@ const clickActions = () => [
   ["open", t("Open music app", "Открыть плеер")],
   ["mute", t("Mute sound", "Выключить звук")],
   ["mic_mute", t("Mute microphone", "Выключить микрофон")],
-  ["pomodoro", t("Pomodoro start / pause", "Помодоро: старт / пауза")],
   ["none", t("No action", "Без действия")],
 ];
 const turnActions = () => [

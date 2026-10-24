@@ -5,7 +5,7 @@ import { PageHeader } from "../components/Layout";
 import { formatError } from "../errors";
 import { t, useI18n } from "../i18n";
 
-type Part = "lighting" | "smart" | "pomodoro" | "anime" | "knob";
+type Part = "lighting" | "knob";
 interface Preset {
   id: string;
   icon: string;
@@ -14,23 +14,17 @@ interface Preset {
   description: string;
   description_ru: string;
   lighting: { color: string; mode: string } | null;
-  smart: unknown | null;
-  pomodoro: { focus_minutes: number; short_break_minutes: number } | null;
-  anime: { character: string } | null;
   knob: { single: string; double: string; triple: string } | null;
 }
 interface Report { applied: Part[]; warnings: string[] }
 
 const PARTS: [Part, () => string][] = [
   ["lighting", () => t("Lighting", "Подсветка")],
-  ["smart", () => t("Smart lighting", "Умная подсветка")],
-  ["pomodoro", () => t("Pomodoro", "Помодоро")],
-  ["anime", () => t("Anime screen", "Аниме-экран")],
   ["knob", () => t("Knob", "Колёсико")],
 ];
 
-/** One-click setups that combine lighting, smart lighting, Pomodoro, the
- *  anime screen and knob gestures. Each part can be left out. */
+/** One-click setups that combine lighting and knob gestures. Each part can
+ *  be left out. */
 export function Presets() {
   const { language } = useI18n();
   const ru = language === "ru";
@@ -61,8 +55,8 @@ export function Presets() {
 
   return <div className="space-y-5">
     <PageHeader title={t("Presets", "Пресеты")}
-      description={t("Set the keyboard up for a situation in one click. Your city, upload permission, music service, app profiles and key mappings are never changed.",
-        "Настройка под ситуацию одним кликом. Город, разрешение на загрузку картинок, музыкальный сервис, профили приложений и переназначения клавиш не меняются.")} />
+      description={t("Set the lighting and knob for a situation in one click. Your music service, app profiles and key mappings are never changed.",
+        "Подсветка и колёсико под ситуацию одним кликом. Музыкальный сервис, профили приложений и переназначения клавиш не меняются.")} />
     <ErrorBanner>{error}</ErrorBanner>
     <div className="grid gap-4 md:grid-cols-2">
       {presets.map(preset => <Card key={preset.id} title={<span className="flex items-center gap-2"><span className="text-xl">{preset.icon}</span>{ru ? preset.name_ru : preset.name}</span>}

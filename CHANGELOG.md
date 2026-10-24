@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [0.9.7-macos.1] — Smart features removed
+
+- Removed smart lighting (Teams calls, Telegram flashes, per-app colours),
+  the Pomodoro timer and the automatic anime screen, with their menu-bar
+  items, preset parts and Smart features tab. Since 0.9.6 every lighting
+  change on FF13 keyboards is saved to the keyboard's flash (without it the
+  keyboard refused commands), and every image upload rewrites the stored
+  animation. These features wrote 100–300 times a day, which could wear the
+  flash out within months to a few years.
+- The app no longer writes to the keyboard on its own: lighting changes
+  only when you apply it, a preset, a colour profile or a menu item, and it
+  is not rewritten after reconnecting (the keyboard keeps it).
+- Presets set lighting and knob gestures only. A knob click set to the
+  removed Pomodoro action becomes "none".
+- Settings files from older versions still import; their smart lighting,
+  Pomodoro and anime screen parts are skipped.
+- Anime cards can still be rendered and uploaded by hand: `ak820 anime`.
+
 ## [0.9.6-macos.1] — Reliable keyboard writes
 
 - Lighting, sleep and clock writes on FF13 keyboards now finish the way

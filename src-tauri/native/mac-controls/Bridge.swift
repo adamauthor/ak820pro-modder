@@ -24,7 +24,6 @@ final class NativeControls: NSObject, NSMenuDelegate {
     var registeredRotation = false
     var heldClick = false
     let controller = MusicController()
-    let detectors = Detectors()
     let battery = BluetoothBattery()
     var statusItem: NSStatusItem?
     var menuState: [String: Any] = [:]
@@ -226,7 +225,6 @@ final class NativeControls: NSObject, NSMenuDelegate {
             switch action {
             case "mute": try toggleOutputMute(); message = "Sound mute toggled"
             case "mic_mute": message = try toggleMicrophoneMute() ? "Microphone muted" : "Microphone on"
-            case "pomodoro": emit(["event": "knob_action", "action": "pomodoro"])
             default: controller.perform(action)
             }
         } catch { lastError = String(describing: error) }
@@ -265,7 +263,6 @@ final class NativeControls: NSObject, NSMenuDelegate {
     }
     func shutdown() throws {
         controller.cancel(); cancelClicks(); pendingProfile?.cancel(); pendingProfile = nil; timer?.invalidate(); timer = nil
-        detectors.configure(teams: false, telegram: false)
         if let applicationObserver { NSWorkspace.shared.notificationCenter.removeObserver(applicationObserver) }; applicationObserver = nil
         if let instanceObserver { DistributedNotificationCenter.default().removeObserver(instanceObserver) }; instanceObserver = nil
         if let backgroundActivity { ProcessInfo.processInfo.endActivity(backgroundActivity) }; backgroundActivity = nil
@@ -298,10 +295,9 @@ final class NativeControls: NSObject, NSMenuDelegate {
         seekHide = task; DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: task)
     }
     func updateStatusTitle() {
-        // Only the Pomodoro countdown and a missing permission are shown next
-        // to the icon; battery and everything else live in the menu.
+        // Only a missing permission is shown next to the icon; battery and
+        // everything else live in the menu.
         var title = ""
-        if let timer = menuState["pomodoro_label"] as? String, !timer.isEmpty { title = " \(timer)" }
         if !(AXIsProcessTrusted() && CGPreflightPostEventAccess()) { title += " ⚠︎" }
         statusItem?.button?.title = title
     }
@@ -321,12 +317,11 @@ final class NativeControls: NSObject, NSMenuDelegate {
         let open = NSMenuItem(title: tr("Open AK820 Pro Modder", "Открыть AK820 Pro Modder"), action: #selector(openWindow), keyEquivalent: "")
         open.target = self; menu.addItem(open)
         if !(AXIsProcessTrusted() && CGPreflightPostEventAccess()) {
-            let fix = NSMenuItem(title: tr("⚠︎ Allow Accessibility (knob clicks, Telegram, players)…", "⚠︎ Разрешите Универсальный доступ (клики, Telegram, плееры)…"), action: #selector(openAccessibility), keyEquivalent: "")
+            let fix = NSMenuItem(title: tr("⚠︎ Allow Accessibility (knob clicks, players)…", "⚠︎ Разрешите Универсальный доступ (клики, плееры)…"), action: #selector(openAccessibility), keyEquivalent: "")
             fix.target = self; menu.addItem(fix)
         }
         if let level = menuState["battery"] as? Int { menu.addItem(item(tr("Battery: \(level)%", "Батарея: \(level)%"), enabled: false)) }
         if let profile = activeProfile?.name { menu.addItem(item(tr("Profile: \(profile)", "Профиль: \(profile)"), enabled: false)) }
-        if let status = menuState["pomodoro_status"] as? String, !status.isEmpty { menu.addItem(item(status, enabled: false)) }
         menu.addItem(.separator())
         let modes = [("original", tr("Original action", "Исходное действие")), ("play_pause", tr("Play / pause", "Воспроизведение / пауза")),
                      ("youtube_music", "YouTube Music"), ("smart", tr("Custom gestures", "Свои жесты"))]
@@ -343,22 +338,6 @@ final class NativeControls: NSObject, NSMenuDelegate {
             lightingItems += colourProfiles.map { item($0, ["event": "menu", "command": "colour_profile", "value": $0], checked: $0 == active, enabled: usb) }
         }
         menu.addItem(submenu(tr("Lighting", "Подсветка") + (usb ? "" : tr(" (USB)", " (USB)")), lightingItems))
-        let smart = menuState["smart"] as? [String: Bool] ?? [:]
-        menu.addItem(submenu(tr("Smart lighting", "Умная подсветка"), [
-            item(tr("Teams calls", "Звонки Teams"), ["event": "menu", "command": "smart", "value": "teams"], checked: smart["teams"] == true),
-            item(tr("Telegram messages", "Сообщения Telegram"), ["event": "menu", "command": "smart", "value": "telegram"], checked: smart["telegram"] == true),
-            item(tr("App lighting", "Подсветка по приложениям"), ["event": "menu", "command": "smart", "value": "apps"], checked: smart["apps"] == true),
-        ]))
-        let phase = menuState["pomodoro"] as? String ?? "idle"
-        var pomodoro = [item(tr("Start focus", "Начать фокус"), ["event": "menu", "command": "pomodoro", "value": "start"])]
-        if phase != "idle" {
-            pomodoro.append(item(phase == "paused" ? tr("Resume", "Продолжить") : tr("Pause", "Пауза"), ["event": "menu", "command": "pomodoro", "value": phase == "paused" ? "resume" : "pause"]))
-            pomodoro.append(item(tr("Skip phase", "Пропустить этап"), ["event": "menu", "command": "pomodoro", "value": "skip"]))
-            pomodoro.append(item(tr("Stop", "Остановить"), ["event": "menu", "command": "pomodoro", "value": "stop"]))
-        }
-        menu.addItem(submenu(tr("Pomodoro", "Помодоро"), pomodoro))
-        let scenes = [("daily", tr("Greeting card", "Открытка дня")), ("weather", tr("Weather", "Погода")), ("now_playing", tr("Now playing", "Сейчас играет"))]
-        menu.addItem(submenu(tr("Anime screen", "Аниме-экран") + (usb ? "" : " (USB)"), scenes.map { item($0.1, ["event": "menu", "command": "anime", "value": $0.0], enabled: usb) }))
         menu.addItem(.separator())
         let quit = NSMenuItem(title: tr("Stop controls and quit", "Остановить и выйти"), action: #selector(quitApplication), keyEquivalent: "")
         quit.target = self; menu.addItem(quit)
@@ -392,13 +371,11 @@ public func ak820MacControlsRequest(_ input: UnsafePointer<CChar>) -> UnsafeMuta
         case "permission": controls.openAccessibility()
         case "menu_state": controls.setMenuState(request["state"] as? [String: Any] ?? [:])
         case "notify": postNotification(title: request["title"] as? String ?? "AK820", body: request["body"] as? String ?? "")
-        case "detectors": controls.detectors.configure(teams: request["teams"] as? Bool == true, telegram: request["telegram"] as? Bool == true)
         case "now_playing":
             // Read on the AppKit thread; AX calls are bounded by short timeouts.
             var result = controls.snapshot()
             result["now_playing"] = youtubeNowPlaying() ?? NSNull()
             return try encodeJSON(result).withCString { strdup($0) }
-        case "telegram_test": emit(["event": "telegram_message", "unread": -1])
         case "battery": controls.battery.read { level in emit(["event": "bluetooth_battery", "level": level as Any? ?? NSNull()]) }
         case "shutdown": try controls.shutdown()
         case "status": break
@@ -506,17 +483,13 @@ public func ak820MacControlsSelftest() -> Int32 {
         let layered = layeredRemaps(base: [ProfileRemap(source: 4, destination: 5), ProfileRemap(source: 6, destination: 7)], profile: [ProfileRemap(source: 6, destination: 8)])
         guard layered == [ProfileRemap(source: 4, destination: 5), ProfileRemap(source: 6, destination: 8)] else { return 24 }
         do { _ = try decodeOwnership(Data(#"{"version":3,"profiles":{}}"#.utf8)); return 25 } catch { }
-        guard badgeCount(nil) == 0, badgeCount("") == 0, badgeCount("12") == 12, badgeCount("•") == 1,
-              isTeamsBundle("com.microsoft.teams2"), !isTeamsBundle("com.apple.Music") else { return 26 }
         var muted = config
-        muted.bindings.single = "mute"; muted.bindings.double = "mic_mute"; muted.bindings.triple = "pomodoro"
+        muted.bindings.single = "mute"; muted.bindings.double = "mic_mute"; muted.bindings.triple = "none"
         muted.base_remaps = [ProfileRemap(source: 4, destination: 111)]
         do { try muted.validate(); return 27 } catch { }
         muted.base_remaps = [ProfileRemap(source: 4, destination: 5)]
         try muted.validate()
         guard GestureBindings().single == "toggle" else { return 28 } // mute is never a default
-        guard parseStatusLabel(#""StatusLabel"={ "label"="5" }"#) == "5", parseStatusLabel(#""StatusLabel"={ "label"=kCFNULL }"#) == nil,
-              parseStatusLabel("") == nil else { return 29 }
         return 0
     } catch { return 6 }
 }

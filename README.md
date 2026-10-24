@@ -14,15 +14,19 @@ A clean replacement for the Windows-only AJAZZ tool — native, transparent, scr
 
 </div>
 
-## Unified macOS fork — 0.9.1-macos.1
+## Unified macOS fork — 0.9.7-macos.1
 
-**New in 0.9:** smart lighting that reacts to Microsoft Teams calls and flashes
-blue for new Telegram messages, a red-lighting **Pomodoro** timer, procedurally
-drawn **anime cards** for the TFT (greeting, weather, now playing), a richer
-menu bar with battery level and quick switches, low-battery notifications,
-mute/mic-mute knob actions, Mac key mappings that come back after reconnecting,
-and one-file settings backup / iCloud sync. See
-[Smart features](docs/SMART-FEATURES.md) and the [changelog](CHANGELOG.md).
+**0.9.x:** per-key RGB and named colour profiles on the FF13 (0C45:800A)
+keyboard, a menu bar with battery level, lighting and colour profiles,
+low-battery notifications, mute/mic-mute knob actions, Mac key mappings that
+come back after reconnecting, and one-file settings backup / iCloud sync.
+See the [changelog](CHANGELOG.md).
+
+Smart lighting (Teams, Telegram, per-app colours), the Pomodoro timer and the
+automatic anime screen were removed in 0.9.7: on this keyboard every lighting
+change and image upload is saved to its flash memory, and those features
+wrote hundreds of times a day. Anime cards can still be rendered and uploaded
+by hand with the CLI.
 
 0.8 added multi-click knob gestures, Shift + turning, automatic application
 profiles (including app-specific key mappings), and a choice of YouTube Music,

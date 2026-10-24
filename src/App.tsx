@@ -14,8 +14,7 @@ import { HostKeymap, HostMacros } from "./views/HostKeyboard";
 import { LegacySystem } from "./views/LegacySystem";
 import { MacControls, UsbRequired } from "./views/MacControls";
 import { MacControlsContext, MacStatus, invokeMac } from "./mac-controls";
-import { Music, Sparkles } from "lucide-react";
-import { Smart } from "./views/Smart";
+import { Music } from "lucide-react";
 import { ICLOUD_SYNC_ENABLED_KEY } from "./components/SyncCard";
 import {
   Layout,
@@ -35,7 +34,6 @@ type Tab =
   | "lighting"
   | "system"
   | "maccontrols"
-  | "smart"
   | "keymap"
   | "macros"
   | "automations"
@@ -46,7 +44,6 @@ const ICON_PROPS = { size: 16, strokeWidth: 1.6 } as const;
 
 const NAV: NavItem<Tab>[] = [
   { id: "maccontrols", label: "Mac controls", icon: <Music {...ICON_PROPS} /> },
-  { id: "smart", label: "Smart features", icon: <Sparkles {...ICON_PROPS} /> },
   { id: "connect", label: "Connectivity", icon: <Plug {...ICON_PROPS} /> },
   { id: "lighting", label: "Lighting", icon: <Bulb {...ICON_PROPS} /> },
   { id: "system", label: "System", icon: <Settings {...ICON_PROPS} /> },
@@ -125,7 +122,7 @@ export default function App() {
 
   const [battery, setBattery] = useState<number | null>(null);
   useEffect(() => {
-    const read = () => { void invoke<{ battery: number | null }>("smart_status").then(s => setBattery(s.battery)).catch(() => {}); };
+    const read = () => { void invoke<{ battery: number | null }>("keyboard_status").then(s => setBattery(s.battery)).catch(() => {}); };
     read();
     const id = window.setInterval(read, 30000);
     return () => window.clearInterval(id);
@@ -157,7 +154,6 @@ export default function App() {
       <div hidden={tab !== "maccontrols"}><MacControls visible={tab === "maccontrols"} /></div>
       {tab === "keymap" && (hostKeyboard ? <HostKeymap /> : capabilities && !capabilities.keymap ? <UnavailableFeature name="Onboard key remapping" /> : <Keymap />)}
       {tab === "macros" && (hostKeyboard ? <HostMacros /> : capabilities && !capabilities.macros ? <UnavailableFeature name="Onboard macros" /> : <Macros />)}
-      {tab === "smart" && <Smart />}
       {tab === "automations" && <Automations />}
       {tab === "presets" && <Presets />}
       {tab === "tft" && (wirelessOnly ? <UsbRequired /> : <Tft />)}

@@ -24,16 +24,14 @@ mod mac_controls;
 use mac_controls::{
     mac_controls_action, mac_controls_refresh, mac_controls_save, mac_controls_status,
 };
-mod anime_screen;
+mod base_lighting;
 mod icloud_sync;
 mod json_store;
 mod now_playing;
 mod now_playing_tft;
-mod pomodoro;
 mod presets;
+mod services;
 mod settings_bundle;
-mod smart;
-mod smart_lighting;
 mod starter_library;
 mod tft_memory;
 mod tft_text;
@@ -41,7 +39,7 @@ use automations::{Automation, RunResult};
 use now_playing::NowPlaying;
 use now_playing_tft::NowPlayingTftState;
 use presets::Preset;
-use smart::Smart;
+use services::Services;
 use starter_library::StarterAutomation;
 use std::sync::Arc;
 use tft_memory::TftMemory;
@@ -721,9 +719,9 @@ pub(crate) async fn apply_colour_profile(
     }
     .cloned()
     .ok_or_else(|| AppError::Protocol("No saved colour profile to apply".into()))?;
-    let smart = app.try_state::<Arc<Smart>>().map(|s| s.inner().clone());
-    let base = match &smart {
-        Some(smart) => smart.lighting.base().await,
+    let services = app.try_state::<Arc<Services>>().map(|s| s.inner().clone());
+    let base = match &services {
+        Some(services) => services.lighting.base().await,
         None => None,
     };
     let config = LightingConfig {
@@ -746,8 +744,8 @@ pub(crate) async fn apply_colour_profile(
             Ok(())
         })
         .await?;
-    match &smart {
-        Some(smart) => smart.lighting.apply_base(config).await?,
+    match &services {
+        Some(services) => services.lighting.apply_base(config).await?,
         None => {
             state
                 .with(|slot| {
@@ -766,8 +764,8 @@ pub(crate) async fn apply_colour_profile(
 
 /// The menu bar lists saved colour profiles; keep it in step with changes.
 async fn refresh_colour_menu(app: &AppHandle) {
-    if let Some(smart) = app.try_state::<Arc<Smart>>() {
-        smart.push_menu().await;
+    if let Some(services) = app.try_state::<Arc<Services>>() {
+        services.push_menu().await;
     }
 }
 
@@ -1063,9 +1061,6 @@ fn list_presets() -> Vec<Preset> {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ApplyPresetOptions {
     pub lighting: bool,
-    pub smart: bool,
-    pub pomodoro: bool,
-    pub anime: bool,
     pub knob: bool,
 }
 
@@ -1079,50 +1074,25 @@ pub struct ApplyPresetReport {
 #[tauri::command]
 async fn apply_preset(
     app: AppHandle,
-    smart: State<'_, Arc<Smart>>,
+    services: State<'_, Arc<Services>>,
+    memory: State<'_, Arc<TftMemory>>,
     id: String,
     options: ApplyPresetOptions,
 ) -> Result<ApplyPresetReport, String> {
     let preset = presets::find(&id).ok_or_else(|| format!("preset '{id}' not found"))?;
     let mut report = ApplyPresetReport::default();
     if let Some(lighting) = preset.lighting.clone().filter(|_| options.lighting) {
-        // Saved as "your lighting" even without USB; it is drawn on reconnect.
-        if smart_lighting::usb_connected() {
-            match smart.lighting.apply_base(lighting).await {
+        if base_lighting::usb_connected() {
+            match services.lighting.apply_base(lighting).await {
                 Ok(()) => report.applied.push("lighting"),
                 Err(error) => report.warnings.push(format!("Lighting: {error:?}")),
             }
+            restore_tft_quietly(memory.inner().clone()).await;
         } else {
-            smart.lighting.set_base(&lighting).await;
-            report.applied.push("lighting");
             report
                 .warnings
-                .push("Lighting saved; it is shown when the keyboard is connected by USB".into());
+                .push("Lighting needs the keyboard connected by USB".into());
         }
-    }
-    if let Some(patch) = preset.smart.as_ref().filter(|_| options.smart) {
-        let config = presets::patch_smart(smart.lighting.config().await, patch);
-        smart.inner().save_smart(config).await?;
-        report.applied.push("smart");
-    }
-    if let Some(pomodoro) = preset.pomodoro.clone().filter(|_| options.pomodoro) {
-        let color = smart.pomodoro_status().await.1.color;
-        smart
-            .save_pomodoro(pomodoro::PomodoroConfig { color, ..pomodoro })
-            .await?;
-        report.applied.push("pomodoro");
-    }
-    if let Some(patch) = preset.anime.as_ref().filter(|_| options.anime) {
-        let current = smart.anime_config().await;
-        if patch.auto && !current.consent {
-            report.warnings.push(
-                "Automatic cards stay off until uploads are allowed in Smart features".into(),
-            );
-        }
-        smart
-            .save_anime(presets::patch_anime(current, patch))
-            .await?;
-        report.applied.push("anime");
     }
     if let Some(bindings) = preset.knob.clone().filter(|_| options.knob) {
         let mut config = mac_controls::config(&app);
@@ -1173,7 +1143,7 @@ async fn force_reconnect(state: State<'_, Arc<ConnState>>) -> Result<(), AppErro
 async fn apply_lighting(
     state: State<'_, Arc<ConnState>>,
     memory: State<'_, Arc<TftMemory>>,
-    smart: State<'_, Arc<Smart>>,
+    services: State<'_, Arc<Services>>,
     config: LightingConfig,
 ) -> Result<(), AppError> {
     // Stale-handle retry is now handled generically by `ConnState::with`.
@@ -1184,8 +1154,8 @@ async fn apply_lighting(
             Ok(())
         })
         .await?;
-    // Remember it as the user's own layer for the smart lighting engine.
-    smart.lighting.set_base(&config).await;
+    // Remember it so the Lighting view and "My lighting" can restore it.
+    services.lighting.set_base(&config).await;
     // SET_LED_EFFECT is observed (and confirmed against the AJAZZ web
     // driver) to reset the TFT to its factory animation. Re-apply what
     // the user last asked the TFT to show.
@@ -1498,100 +1468,26 @@ async fn now_playing_tft_status(
     Ok(state.is_running().await)
 }
 
-/* ------------------------------------- smart lighting, Pomodoro, anime --
- *
- * Thin wrappers over `smart::Smart`, which owns the background tasks.
- */
+/* ------------------------------------------- keyboard status, language */
 
 #[tauri::command]
-async fn smart_status(smart: State<'_, Arc<Smart>>) -> Result<smart::SmartStatus, String> {
-    Ok(smart.smart_status().await)
+async fn keyboard_status(
+    services: State<'_, Arc<Services>>,
+) -> Result<services::KeyboardStatus, String> {
+    Ok(services.keyboard_status().await)
 }
 #[tauri::command]
-async fn smart_save(
-    smart: State<'_, Arc<Smart>>,
-    config: smart_lighting::SmartConfig,
+async fn lighting_base_get(
+    services: State<'_, Arc<Services>>,
+) -> Result<Option<LightingConfig>, String> {
+    Ok(services.lighting.base().await)
+}
+#[tauri::command]
+async fn set_ui_language(
+    services: State<'_, Arc<Services>>,
+    language: String,
 ) -> Result<(), String> {
-    smart.inner().save_smart(config).await
-}
-/// Plays a smart-lighting effect once so it can be checked without a real
-/// Telegram message or Teams call.
-#[tauri::command]
-async fn smart_test(smart: State<'_, Arc<Smart>>, kind: String) -> Result<(), String> {
-    if !smart_lighting::usb_connected() {
-        return Err(
-            "Connect the keyboard by USB: lighting needs the cable on this revision".into(),
-        );
-    }
-    let lighting = smart.lighting.clone();
-    match kind.as_str() {
-        "telegram" => {
-            let config = lighting.config().await;
-            lighting
-                .flash(&config.telegram_color, config.telegram_flashes)
-                .await;
-        }
-        "teams" => {
-            lighting.set_teams(true).await;
-            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-            lighting.set_teams(false).await;
-        }
-        "teams_ring" => {
-            lighting.set_ringing(true).await;
-            tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-            lighting.set_ringing(false).await;
-        }
-        _ => return Err("Unknown test".into()),
-    }
-    Ok(())
-}
-#[tauri::command]
-async fn lighting_base_get(smart: State<'_, Arc<Smart>>) -> Result<Option<LightingConfig>, String> {
-    Ok(smart.lighting.base().await)
-}
-#[tauri::command]
-async fn pomodoro_status(
-    smart: State<'_, Arc<Smart>>,
-) -> Result<(pomodoro::Snapshot, pomodoro::PomodoroConfig), String> {
-    Ok(smart.pomodoro_status().await)
-}
-#[tauri::command]
-async fn pomodoro_command(smart: State<'_, Arc<Smart>>, command: String) -> Result<(), String> {
-    smart.inner().pomodoro_command(&command).await
-}
-#[tauri::command]
-async fn pomodoro_save(
-    smart: State<'_, Arc<Smart>>,
-    config: pomodoro::PomodoroConfig,
-) -> Result<(), String> {
-    smart.save_pomodoro(config).await
-}
-#[tauri::command]
-async fn anime_config(smart: State<'_, Arc<Smart>>) -> Result<anime_screen::AnimeConfig, String> {
-    Ok(smart.anime_config().await)
-}
-#[tauri::command]
-async fn anime_save(
-    smart: State<'_, Arc<Smart>>,
-    config: anime_screen::AnimeConfig,
-) -> Result<(), String> {
-    smart.save_anime(config).await
-}
-#[tauri::command]
-fn anime_characters() -> Vec<(ak820_anime::Character, &'static str)> {
-    ak820_anime::characters()
-}
-#[tauri::command]
-async fn anime_preview(smart: State<'_, Arc<Smart>>, scene: String) -> Result<Vec<String>, String> {
-    smart.anime_preview(scene).await
-}
-#[tauri::command]
-async fn anime_upload(smart: State<'_, Arc<Smart>>, scene: String) -> Result<(), String> {
-    smart.anime_upload(&scene).await
-}
-#[tauri::command]
-async fn set_ui_language(smart: State<'_, Arc<Smart>>, language: String) -> Result<(), String> {
-    smart.inner().set_language(language).await;
+    services.inner().set_language(language).await;
     Ok(())
 }
 
@@ -1602,8 +1498,8 @@ async fn reload_settings(app: &AppHandle) -> Result<(), String> {
     let config: mac_controls::Config = json_store::load(&dir, "mac-controls.json");
     mac_controls::save(app, config).await?;
     refresh_automation_shortcuts(app)?;
-    if let Some(smart) = app.try_state::<Arc<Smart>>() {
-        smart.inner().reload().await?;
+    if let Some(services) = app.try_state::<Arc<Services>>() {
+        services.inner().reload().await?;
     }
     Ok(())
 }
@@ -1794,18 +1690,8 @@ pub fn run() {
             now_playing_tft_start,
             now_playing_tft_stop,
             now_playing_tft_status,
-            smart_status,
-            smart_save,
-            smart_test,
+            keyboard_status,
             lighting_base_get,
-            pomodoro_status,
-            pomodoro_command,
-            pomodoro_save,
-            anime_config,
-            anime_save,
-            anime_characters,
-            anime_preview,
-            anime_upload,
             set_ui_language,
             settings_export,
             settings_import,
@@ -1918,12 +1804,12 @@ pub fn run() {
             if let Err(error) = mac_controls::initialize(app.handle()) {
                 tracing::warn!(%error, "Mac controls startup needs attention");
             }
-            match Smart::new(app.handle().clone(), app.state::<Arc<ConnState>>().inner().clone()) {
-                Ok(smart) => {
-                    smart.start(native_events);
-                    app.manage(smart);
+            match Services::new(app.handle().clone(), app.state::<Arc<ConnState>>().inner().clone()) {
+                Ok(services) => {
+                    services.start(native_events);
+                    app.manage(services);
                 }
-                Err(error) => tracing::warn!(%error, "smart services unavailable"),
+                Err(error) => tracing::warn!(%error, "background services unavailable"),
             }
             if let Err(e) = refresh_automation_shortcuts(app.handle()) {
                 tracing::warn!("initial automation shortcut registration failed: {e}");
