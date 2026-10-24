@@ -211,7 +211,7 @@ export function Lighting() {
       />
 
       <ErrorBanner>{err}</ErrorBanner>
-      {legacy && <p className="mb-5 text-sm text-fg-2">{t("This revision supports the 20 built-in lighting effects. Per-key painting and audio-reactive lighting need a different protocol and are unavailable.")}</p>}
+      {legacy && <p className="mb-5 text-sm text-fg-2">{t("This revision supports the built-in effects and per-key painting (custom). Audio-reactive lighting needs a different protocol and is unavailable.", "Эта ревизия поддерживает встроенные эффекты и раскраску по клавишам (custom). Подсветка под музыку требует другого протокола и недоступна.")}</p>}
 
       <div className="grid gap-6">
         <div
@@ -228,7 +228,7 @@ export function Lighting() {
           }
         >
           <div className="flex flex-wrap gap-2">
-            {modes.filter((m) => !legacy || m.name !== "custom").map((m) => {
+            {modes.filter((m) => !legacy || caps?.per_key_rgb || m.name !== "custom").map((m) => {
               const isActive = m.name === cfg.mode;
               return (
                 <Button

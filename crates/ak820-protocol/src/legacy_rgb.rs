@@ -3,7 +3,7 @@
 //! Common UI slots are translated to this revision's one-based LED matrix.
 //! Ported from vespovios/ak820pro-modder@017c18b; verified there on an ANSI
 //! 0C45:800A (WASD + E). The slot table is ANSI-only.
-use crate::legacy::{control_packet, send, TransactionLock};
+use crate::legacy::{control_packet, TransactionLock};
 use crate::{
     commands::per_key_rgb::{CustomLedMap, LED_COUNT},
     Error, Result,
@@ -132,29 +132,62 @@ fn validate_ack(reply: &[u8; 64], command: u8) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn apply(
-    device: &HidDevice,
-    pid: u16,
-    map: &CustomLedMap,
-    brightness: u8,
-) -> Result<()> {
+/// Mode 80 with the stored colour bank. Brightness is 0-5.
+pub(crate) fn select_custom(device: &HidDevice, pid: u16, brightness: u8) -> Result<()> {
     let _guard = TransactionLock::acquire(pid)?;
-    apply_with(
-        |p| {
-            let r = send(device, p)?;
-            Ok(r[1..].try_into().unwrap())
-        },
-        map,
-        brightness,
-    )
+    select_with(|p| exchange(device, p), brightness)
 }
 
-fn apply_with(
-    mut send: impl FnMut(&[u8; 64]) -> Result<[u8; 64]>,
-    map: &CustomLedMap,
-    brightness: u8,
+/// Replace the stored colour bank without changing the active mode.
+pub(crate) fn write_bank(device: &HidDevice, pid: u16, map: &CustomLedMap) -> Result<()> {
+    let _guard = TransactionLock::acquire(pid)?;
+    bank_with(|p| exchange(device, p), map)
+}
+
+/// Raw feature exchange; callers check command status with validate_ack.
+fn exchange(device: &HidDevice, packet: &[u8; 64]) -> Result<[u8; 64]> {
+    let mut wire = [0u8; 65];
+    wire[1..].copy_from_slice(packet);
+    device.send_feature_report(&wire)?;
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    let mut response = [0u8; 65];
+    if device.get_feature_report(&mut response)? != response.len() {
+        return Err(Error::UnexpectedResponse(
+            "Short feature-report handshake".into(),
+        ));
+    }
+    Ok(response[1..].try_into().unwrap())
+}
+
+/// For 1-2 s after an effect change START answers status FF or an empty
+/// report (observed on 0C45:800A); the firmware accepts it once settled.
+const START_RETRIES: usize = 10;
+const START_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
+
+fn start(send: &mut dyn FnMut(&[u8; 64]) -> Result<[u8; 64]>) -> Result<()> {
+    for _ in 1..START_RETRIES {
+        let reply = send(&packet(0x18, 0))?;
+        let busy = reply.iter().all(|&b| b == 0) || reply[..4] == [4, 0x18, 0, 0xff];
+        if busy {
+            std::thread::sleep(START_RETRY_DELAY);
+            continue;
+        }
+        return validate_ack(&reply, 0x18);
+    }
+    validate_ack(&send(&packet(0x18, 0))?, 0x18)
+}
+
+/// Runs one START..END session; END is sent even after a failure.
+fn session(
+    send: &mut impl FnMut(&[u8; 64]) -> Result<[u8; 64]>,
+    body: impl FnOnce(&mut dyn FnMut(&[u8; 64]) -> Result<[u8; 64]>) -> Result<()>,
 ) -> Result<()> {
-    let data = encode(map)?;
+    let result = body(send);
+    let finished = send(&packet(0xf0, 0)).and_then(|r| validate_ack(&r, 0xf0));
+    result.and(finished)
+}
+
+fn select_with(mut send: impl FnMut(&[u8; 64]) -> Result<[u8; 64]>, brightness: u8) -> Result<()> {
     if brightness > 5 {
         return Err(Error::OutOfRange {
             field: "custom RGB brightness",
@@ -166,16 +199,22 @@ fn apply_with(
     mode[0] = 0x80;
     mode[9] = brightness;
     mode[14..16].copy_from_slice(&[0xaa, 0x55]);
-    let result = (|| {
-        for (op, flag) in [(0x18, 0), (0x13, 1)] {
-            validate_ack(&send(&packet(op, flag))?, op)?;
-        }
+    session(&mut send, |send| {
+        start(send)?;
+        validate_ack(&send(&packet(0x13, 1))?, 0x13)?;
         send(&mode)?;
-        validate_ack(&send(&packet(2, 0))?, 2)?;
-        validate_ack(&send(&packet(0xf0, 0))?, 0xf0)?;
-        for (op, flag) in [(0x18, 0), (0x23, 9)] {
-            validate_ack(&send(&packet(op, flag))?, op)?;
-        }
+        validate_ack(&send(&packet(2, 0))?, 2)
+    })
+}
+
+fn bank_with(
+    mut send: impl FnMut(&[u8; 64]) -> Result<[u8; 64]>,
+    map: &CustomLedMap,
+) -> Result<()> {
+    let data = encode(map)?;
+    session(&mut send, |send| {
+        start(send)?;
+        validate_ack(&send(&packet(0x23, 9))?, 0x23)?;
         for bytes in data.chunks_exact(64) {
             let p: &[u8; 64] = bytes.try_into().unwrap();
             // Data replies echo raw colour bytes; only command ACKs carry
@@ -183,9 +222,20 @@ fn apply_with(
             send(p)?;
         }
         validate_ack(&send(&packet(2, 0))?, 2)
-    })();
-    let finished = send(&packet(0xf0, 0)).and_then(|r| validate_ack(&r, 0xf0));
-    result.and(finished)
+    })
+}
+
+/// Both sessions in vendor order; covers the full transaction in tests.
+#[cfg(test)]
+fn apply_with(
+    mut send: impl FnMut(&[u8; 64]) -> Result<[u8; 64]>,
+    map: &CustomLedMap,
+    brightness: u8,
+) -> Result<()> {
+    // Validate both inputs before the first session reaches hardware.
+    encode(map)?;
+    select_with(&mut send, brightness)?;
+    bank_with(&mut send, map)
 }
 
 #[cfg(test)]
@@ -246,6 +296,29 @@ mod tests {
         assert_eq!(packets[16], packet(2, 0));
         assert_eq!(packets[17], packet(0xf0, 0));
     }
+    #[test]
+    fn busy_start_is_retried_then_the_session_continues() {
+        let mut busy = 2;
+        let mut packets = Vec::new();
+        select_with(
+            |p| {
+                packets.push(*p);
+                let mut r = *p;
+                r[3] = if p[1] == 0x18 && busy > 0 {
+                    busy -= 1;
+                    0xff
+                } else {
+                    1
+                };
+                Ok(r)
+            },
+            3,
+        )
+        .unwrap();
+        assert_eq!(packets.iter().filter(|p| **p == packet(0x18, 0)).count(), 3);
+        assert_eq!(packets.last().unwrap(), &packet(0xf0, 0));
+    }
+
     #[test]
     fn rejects_malformed_maps_before_hardware_and_never_commits_failed_bank() {
         let mut m = CustomLedMap::default();

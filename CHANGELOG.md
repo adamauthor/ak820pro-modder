@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [0.9.5-macos.1] — Per-key RGB in the app and colour profiles
+
+- Lighting → custom works on FF13 keyboards: paint keys on the layout and
+  each stroke is written to the keyboard (ANSI LED layout; the ISO key
+  left of Z has no LED). The last written map is remembered, since the
+  firmware cannot report it.
+- Colour profiles: save the current paint under a name, apply or delete
+  it, import and export profiles as JSON, and cycle through them with a
+  global shortcut (e.g. Control+Alt+C). Applying keeps your brightness and
+  becomes the base layer for smart lighting.
+- Switching to custom right after another effect no longer fails: the
+  keyboard is busy for about 2 s after an effect change, and the RGB write
+  now waits for it.
+
 ## [0.9.4-macos.1] — TFT slot 1 and per-key RGB
 
 - TFT uploads on FF13 firmware target custom slot 1 (`04 72 01`) instead of

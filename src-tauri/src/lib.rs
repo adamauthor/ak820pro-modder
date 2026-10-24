@@ -10,7 +10,7 @@ use ak820_protocol::{
     Connection, DeviceInfo,
 };
 use serde::Serialize;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 use tokio::sync::Mutex;
 use tracing_subscriber::EnvFilter;
@@ -18,6 +18,7 @@ use tracing_subscriber::EnvFilter;
 #[cfg(target_os = "macos")]
 mod audio_reactive;
 mod automations;
+mod colour_profiles;
 mod host_keyboard;
 mod mac_controls;
 use mac_controls::{
@@ -132,6 +133,28 @@ fn refresh_automation_shortcuts(app: &AppHandle) -> Result<(), String> {
             }
         })
         .map_err(|e| e.to_string())?;
+    }
+    let cycle = colour_profiles::load(&app.path().app_data_dir().map_err(|e| e.to_string())?)
+        .cycle_shortcut;
+    if !cycle.is_empty() {
+        match cycle.parse::<Shortcut>() {
+            Ok(shortcut) if !mgr.is_registered(shortcut) => {
+                let app_handle = app.clone();
+                mgr.on_shortcut(shortcut, move |_, _, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    let app = app_handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(error) = apply_colour_profile(&app, None).await {
+                            tracing::warn!(?error, "colour profile shortcut failed");
+                        }
+                    });
+                })
+                .map_err(|e| e.to_string())?;
+            }
+            _ => tracing::warn!(shortcut = %cycle, "colour profile shortcut unavailable"),
+        }
     }
     Ok(())
 }
@@ -625,22 +648,43 @@ async fn set_macros(
     Ok(())
 }
 
+fn data_dir(app: &AppHandle) -> Result<std::path::PathBuf, AppError> {
+    app.path()
+        .app_data_dir()
+        .map_err(|e| AppError::Protocol(format!("app_data_dir: {e}")))
+}
+
 #[tauri::command]
-async fn get_custom_led(state: State<'_, Arc<ConnState>>) -> Result<CustomLedMap, AppError> {
-    state
+async fn get_custom_led(
+    app: AppHandle,
+    state: State<'_, Arc<ConnState>>,
+) -> Result<CustomLedMap, AppError> {
+    let stored = state
         .with(|slot| {
             let conn = ensure_open(slot)?;
-            Ok(conn.get_custom_led()?)
+            if conn.info().protocol == ak820_protocol::device::DeviceProtocol::LegacyFeature {
+                return Ok(None);
+            }
+            Ok(Some(conn.get_custom_led()?))
         })
-        .await
+        .await?;
+    // Feature-report firmware has no read-back: show the last map we wrote.
+    match stored {
+        Some(map) => Ok(map),
+        None => Ok(colour_profiles::load(&data_dir(&app)?)
+            .current
+            .unwrap_or_default()),
+    }
 }
 
 #[tauri::command]
 async fn set_custom_led(
+    app: AppHandle,
     state: State<'_, Arc<ConnState>>,
     memory: State<'_, Arc<TftMemory>>,
     map: CustomLedMap,
 ) -> Result<(), AppError> {
+    colour_profiles::validate_map(&map).map_err(AppError::Protocol)?;
     state
         .with(|slot| {
             let conn = ensure_open(slot)?;
@@ -648,7 +692,160 @@ async fn set_custom_led(
             Ok(())
         })
         .await?;
+    remember_custom_led(&app, map, None);
     restore_tft_quietly(memory.inner().clone()).await;
+    Ok(())
+}
+
+fn remember_custom_led(app: &AppHandle, map: CustomLedMap, active: Option<String>) {
+    let Ok(dir) = data_dir(app) else { return };
+    let mut store = colour_profiles::load(&dir);
+    store.current = Some(map);
+    store.active = active;
+    if let Err(error) = colour_profiles::save(&dir, &store) {
+        tracing::warn!(%error, "could not remember the colour map");
+    }
+}
+
+/// Writes a saved profile and switches the keyboard to custom mode, keeping
+/// the brightness of the user's own lighting.
+async fn apply_colour_profile(app: &AppHandle, name: Option<&str>) -> Result<String, AppError> {
+    let dir = data_dir(app)?;
+    let store = colour_profiles::load(&dir);
+    let profile = match name {
+        Some(name) => store.get(name),
+        None => store.next(),
+    }
+    .cloned()
+    .ok_or_else(|| AppError::Protocol("No saved colour profile to apply".into()))?;
+    let smart = app.try_state::<Arc<Smart>>().map(|s| s.inner().clone());
+    let base = match &smart {
+        Some(smart) => smart.lighting.base().await,
+        None => None,
+    };
+    let config = LightingConfig {
+        mode: Mode::Custom,
+        color: "FFFFFF".into(),
+        secondary: None,
+        color_mode: 0,
+        effect_mode_type: 0,
+        brightness: base.map_or(ak820_protocol::commands::lighting::MAX_BRIGHTNESS, |b| {
+            b.brightness
+        }),
+        speed: 0,
+        direction: Direction::Left,
+    };
+    let state = app.state::<Arc<ConnState>>().inner().clone();
+    let map = profile.map.clone();
+    state
+        .with(|slot| {
+            ensure_open(slot)?.set_custom_led(&map)?;
+            Ok(())
+        })
+        .await?;
+    match &smart {
+        Some(smart) => smart.lighting.apply_base(config).await?,
+        None => {
+            state
+                .with(|slot| {
+                    ensure_open(slot)?.set_lighting(&config)?;
+                    Ok(())
+                })
+                .await?
+        }
+    }
+    remember_custom_led(app, profile.map, Some(profile.name.clone()));
+    restore_tft_quietly(app.state::<Arc<TftMemory>>().inner().clone()).await;
+    let _ = app.emit("colour-profile-applied", &profile.name);
+    Ok(profile.name)
+}
+
+#[tauri::command]
+fn colour_profiles_get(app: AppHandle) -> Result<colour_profiles::Store, AppError> {
+    Ok(colour_profiles::load(&data_dir(&app)?))
+}
+
+#[tauri::command]
+fn colour_profile_save(app: AppHandle, name: String, map: CustomLedMap) -> Result<(), AppError> {
+    let dir = data_dir(&app)?;
+    let mut store = colour_profiles::load(&dir);
+    store.upsert(&name, map).map_err(AppError::Protocol)?;
+    store.active = Some(name.trim().to_string());
+    colour_profiles::save(&dir, &store).map_err(AppError::Protocol)
+}
+
+#[tauri::command]
+fn colour_profile_delete(app: AppHandle, name: String) -> Result<(), AppError> {
+    let dir = data_dir(&app)?;
+    let mut store = colour_profiles::load(&dir);
+    store.remove(&name);
+    colour_profiles::save(&dir, &store).map_err(AppError::Protocol)
+}
+
+#[tauri::command]
+async fn colour_profile_apply(app: AppHandle, name: String) -> Result<String, AppError> {
+    apply_colour_profile(&app, Some(&name)).await
+}
+
+#[tauri::command]
+fn colour_profiles_export(
+    app: AppHandle,
+    path: String,
+    names: Vec<String>,
+) -> Result<(), AppError> {
+    let text = colour_profiles::load(&data_dir(&app)?)
+        .export_json(&names)
+        .map_err(AppError::Protocol)?;
+    std::fs::write(&path, text).map_err(|e| AppError::Protocol(format!("write {path}: {e}")))
+}
+
+#[tauri::command]
+fn colour_profiles_import(app: AppHandle, path: String) -> Result<Vec<String>, AppError> {
+    let meta = std::fs::metadata(&path).map_err(|e| AppError::Protocol(e.to_string()))?;
+    if meta.len() > 2 * 1024 * 1024 {
+        return Err(AppError::Protocol(
+            "Colour profile file is larger than 2 MB".into(),
+        ));
+    }
+    let text = std::fs::read_to_string(&path).map_err(|e| AppError::Protocol(e.to_string()))?;
+    let dir = data_dir(&app)?;
+    let mut store = colour_profiles::load(&dir);
+    let names = store.import_json(&text).map_err(AppError::Protocol)?;
+    colour_profiles::save(&dir, &store).map_err(AppError::Protocol)?;
+    Ok(names)
+}
+
+#[tauri::command]
+fn colour_cycle_shortcut_set(app: AppHandle, shortcut: String) -> Result<(), AppError> {
+    let shortcut = shortcut.trim().to_string();
+    if !shortcut.is_empty() {
+        if mac_controls::shortcut_reserved(&app, &shortcut) {
+            return Err(AppError::Protocol(
+                "This shortcut key is reserved for the knob".into(),
+            ));
+        }
+        let parsed: Shortcut = shortcut
+            .parse()
+            .map_err(|e| AppError::Protocol(format!("Invalid shortcut: {e}")))?;
+        let dir = data_dir(&app)?;
+        let current = colour_profiles::load(&dir).cycle_shortcut;
+        let ours = current.parse::<Shortcut>().ok() == Some(parsed);
+        if !ours && app.global_shortcut().is_registered(parsed) {
+            return Err(AppError::Protocol(
+                "Shortcut already used by a macro or automation".into(),
+            ));
+        }
+    }
+    let dir = data_dir(&app)?;
+    let mut store = colour_profiles::load(&dir);
+    let previous = std::mem::replace(&mut store.cycle_shortcut, shortcut);
+    colour_profiles::save(&dir, &store).map_err(AppError::Protocol)?;
+    if let Err(error) = refresh_automation_shortcuts(&app) {
+        store.cycle_shortcut = previous;
+        colour_profiles::save(&dir, &store).map_err(AppError::Protocol)?;
+        let _ = refresh_automation_shortcuts(&app);
+        return Err(AppError::Protocol(error));
+    }
     Ok(())
 }
 
@@ -1546,6 +1743,13 @@ pub fn run() {
             macro_limits,
             get_custom_led,
             set_custom_led,
+            colour_profiles_get,
+            colour_profile_save,
+            colour_profile_delete,
+            colour_profile_apply,
+            colour_profiles_export,
+            colour_profiles_import,
+            colour_cycle_shortcut_set,
             get_now_playing,
             list_automations,
             save_automations,

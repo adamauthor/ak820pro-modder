@@ -27,6 +27,8 @@ import { type PhysicalKey } from "../data/layouts";
 import { useLayout } from "../data/layouts/use-layout";
 import type { CustomLedMap, LedColor, LightingConfig } from "../types";
 import { formatError } from "../errors";
+import { useCapabilities } from "../capabilities";
+import { ColourProfiles } from "./ColourProfiles";
 
 interface Props {
   /** Brightness + speed from the parent Lighting view — unused by the
@@ -38,9 +40,12 @@ interface Props {
 const LED_COUNT = 128;
 const DEFAULT_PAINT = "FFFFFF";
 const APPLY_DEBOUNCE_MS = 120;
+// FF13 saves every bank write (~1 s per write), so batch strokes longer.
+const LEGACY_APPLY_DEBOUNCE_MS = 600;
 
 export function CustomLightingPaint({ inheritedConfig }: Props) {
   const { layout } = useLayout();
+  const legacy = useCapabilities()?.protocol === "legacy_feature";
   const layoutRows = layout.rows;
   const [remote, setRemote] = useState<CustomLedMap | null>(null);
   const [draft, setDraft] = useState<LedColor[]>(() => emptyMap());
@@ -55,6 +60,9 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
   const queued = useRef<LedColor[] | null>(null);
   const pending = useRef<number | null>(null);
   const initRef = useRef(false);
+  // Legacy firmware keeps rendering the bank once in custom mode; the
+  // Lighting view already selected it, so later writes skip the mode flip.
+  const modeSelected = useRef(false);
 
   /* ----- IO ---------------------------------------------------------- */
 
@@ -91,9 +99,13 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
         // 1. write the per-key buffer
         await invoke("set_custom_led", { map: { leds: map } });
         // 2. flip the firmware to render from it
-        await invoke("apply_lighting", {
-          config: { ...inheritedConfig, mode: "custom" } satisfies LightingConfig,
-        });
+        if (!legacy || !modeSelected.current) {
+          await invoke("apply_lighting", {
+            config: { ...inheritedConfig, mode: "custom" } satisfies LightingConfig,
+          });
+          modeSelected.current = true;
+        }
+        setRemote({ leds: map });
         setLastApplied(new Date().toLocaleTimeString());
       } catch (e) {
         setErr(formatError(e));
@@ -105,7 +117,7 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
         if (drain) void apply(drain);
       }
     },
-    [inheritedConfig],
+    [inheritedConfig, legacy],
   );
 
   function scheduleApply(map: LedColor[]) {
@@ -113,7 +125,7 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
     pending.current = window.setTimeout(() => {
       pending.current = null;
       void apply(map);
-    }, APPLY_DEBOUNCE_MS);
+    }, legacy ? LEGACY_APPLY_DEBOUNCE_MS : APPLY_DEBOUNCE_MS);
   }
 
   /* ----- edit ops ---------------------------------------------------- */
@@ -145,6 +157,12 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
     setDraft(next);
     if (autoApply) scheduleApply(next);
   }
+
+  const onProfileApplied = useCallback((map: CustomLedMap) => {
+    setRemote(map);
+    setDraft(map.leds.map((c) => ({ ...c })));
+    setLastApplied(new Date().toLocaleTimeString());
+  }, []);
 
   /* ----- diff --------------------------------------------------------- */
 
@@ -239,6 +257,17 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
           paintSlot(slot, paintColor);
         }}
       />
+
+      {legacy && (
+        <p className="mt-3 text-xs text-fg-3">
+          {t(
+            "This keyboard cannot report its colours, so the map shown is the last one this app wrote. Colours follow the ANSI LED layout; the ISO key left of Z is not mapped.",
+            "Эта клавиатура не отдаёт свои цвета, поэтому показана последняя раскраска, записанная приложением. Цвета идут по раскладке светодиодов ANSI; ISO-клавиша слева от Z не подсвечивается.",
+          )}
+        </p>
+      )}
+
+      <ColourProfiles draft={draft} onApplied={onProfileApplied} busy={busy} />
 
       <p className="mt-4 border-t border-line/60 pt-3 text-xs text-fg-3">{" "}{t("Per-key RGB is the lighting mode at byte")}{" "}<Mono>0x80</Mono>{t(". The 20 animated modes ignore this buffer; switching the lighting mode away from")}{" "}<Badge tone="accent">{t("custom")}</Badge>{" "}{t("will hide your paint until you switch back. Selected slot:")}{" "}
         <Mono>{selected === null ? "—" : `#${selected}`}</Mono>.

@@ -125,9 +125,24 @@ END (04 F0); then START, 04 23 flag 9, nine unframed 64-byte blocks of the
 two bytes), SAVE and END. Command replies must carry status 1 in byte 3;
 data replies echo colour bytes and are not checked. END is always sent, and
 a failed bank is never saved. The slot table is ANSI only and was verified
-there with WASD and E; ISO keys are not mapped. The CLI exposes it as
-`rgb fill` / `rgb rainbow` on this firmware. Each write commits, so it is
-not used for streaming effects.
+there with WASD and E; the ISO key left of Z (slot 98) has no LED index.
+
+`set_lighting(custom)` runs the first session only (mode 80 renders the
+stored bank) and `set_custom_led` the second, so the app's paint view and
+`ak820 rgb fill` / `rgb rainbow` use the same calls as on web firmware.
+The firmware has no bank read-back; the app shows the last map it wrote.
+Each write is saved, so audio-reactive streaming stays disabled.
+
+Busy window, observed on this keyboard: the effect transaction above
+(START, 13, data, END without SAVE) gets status FF on END, and for about
+2 s START answers FF or an all-zero report. After a session closed with
+SAVE and END, START is accepted at once. The RGB sessions retry START for
+up to 3 s; effect writes keep their framing so smart lighting does not
+save to the keyboard on every change.
+
+The Lighting view keeps named colour profiles (`colour-profiles.json` in
+the app data folder): save the current paint, apply, delete, import and
+export as JSON, and a global shortcut that applies the next profile.
 
 ## Validation on the attached keyboard
 

@@ -56,7 +56,7 @@ pub fn lighting_packet(config: &LightingConfig) -> Result<[u8; 64]> {
     }
     if config.mode == Mode::Custom {
         return Err(Error::NotImplemented(
-            "Per-key RGB format is not verified for feature-report firmware",
+            "Custom mode is selected through legacy_rgb, not the effect packet",
         ));
     }
     let (mode, speed, brightness) = match config.mode {
@@ -133,8 +133,9 @@ pub(crate) fn send(device: &HidDevice, packet: &[u8; 64]) -> Result<[u8; 65]> {
     }
     if packet[0] == 4 && response[1..3] != packet[..2] {
         return Err(Error::UnexpectedResponse(format!(
-            "Wrong feature handshake for command {:02x}",
-            packet[1]
+            "Wrong feature handshake for command {:02x}: {}",
+            packet[1],
+            hex::encode(&response[1..10])
         )));
     }
     Ok(response)
