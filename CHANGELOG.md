@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [0.9.6-macos.1] — Reliable keyboard writes
+
+- Lighting, sleep and clock writes on FF13 keyboards now finish the way
+  the vendor driver does (SAVE before END) and check every reply. Before,
+  the keyboard refused all commands for about 2 s after each lighting
+  change, so quick changes from smart lighting (Telegram flashes, app
+  switching, Teams) could be silently lost. Back-to-back changes now take
+  about 0.3 s each and are confirmed by the keyboard.
+- Image uploads check the keyboard's replies, wait while it is busy and
+  close the session after a failure. This fixes uploads that stopped at
+  "No acknowledgement for TFT chunk 1".
+- A lighting change during an image upload waits for it instead of
+  failing with "Another keyboard operation is running".
+- Colour profiles appear in the menu bar under Lighting and can be
+  applied with the window closed. They are included in settings export,
+  import and iCloud sync.
+
 ## [0.9.5-macos.1] — Per-key RGB in the app and colour profiles
 
 - Lighting → custom works on FF13 keyboards: paint keys on the layout and

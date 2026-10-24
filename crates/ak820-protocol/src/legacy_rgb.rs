@@ -3,7 +3,7 @@
 //! Common UI slots are translated to this revision's one-based LED matrix.
 //! Ported from vespovios/ak820pro-modder@017c18b; verified there on an ANSI
 //! 0C45:800A (WASD + E). The slot table is ANSI-only.
-use crate::legacy::{control_packet, TransactionLock};
+use crate::legacy::{control_packet, exchange, transaction, Send, TransactionLock};
 use crate::{
     commands::per_key_rgb::{CustomLedMap, LED_COUNT},
     Error, Result,
@@ -117,77 +117,7 @@ pub fn encode(map: &CustomLedMap) -> Result<[u8; 576]> {
     Ok(data)
 }
 
-fn packet(op: u8, flag: u8) -> [u8; 64] {
-    control_packet(op, 0, flag.into())
-}
-
-/// Command replies echo `04 <op>` and carry status 1 in byte 3.
-fn validate_ack(reply: &[u8; 64], command: u8) -> Result<()> {
-    if reply[0] != 4 || reply[1] != command || reply[3] != 1 {
-        return Err(Error::UnexpectedResponse(format!(
-            "keyboard did not acknowledge feature command 0x{command:02x}: {}",
-            hex::encode(&reply[..9])
-        )));
-    }
-    Ok(())
-}
-
-/// Mode 80 with the stored colour bank. Brightness is 0-5.
-pub(crate) fn select_custom(device: &HidDevice, pid: u16, brightness: u8) -> Result<()> {
-    let _guard = TransactionLock::acquire(pid)?;
-    select_with(|p| exchange(device, p), brightness)
-}
-
-/// Replace the stored colour bank without changing the active mode.
-pub(crate) fn write_bank(device: &HidDevice, pid: u16, map: &CustomLedMap) -> Result<()> {
-    let _guard = TransactionLock::acquire(pid)?;
-    bank_with(|p| exchange(device, p), map)
-}
-
-/// Raw feature exchange; callers check command status with validate_ack.
-fn exchange(device: &HidDevice, packet: &[u8; 64]) -> Result<[u8; 64]> {
-    let mut wire = [0u8; 65];
-    wire[1..].copy_from_slice(packet);
-    device.send_feature_report(&wire)?;
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    let mut response = [0u8; 65];
-    if device.get_feature_report(&mut response)? != response.len() {
-        return Err(Error::UnexpectedResponse(
-            "Short feature-report handshake".into(),
-        ));
-    }
-    Ok(response[1..].try_into().unwrap())
-}
-
-/// For 1-2 s after an effect change START answers status FF or an empty
-/// report (observed on 0C45:800A); the firmware accepts it once settled.
-const START_RETRIES: usize = 10;
-const START_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(300);
-
-fn start(send: &mut dyn FnMut(&[u8; 64]) -> Result<[u8; 64]>) -> Result<()> {
-    for _ in 1..START_RETRIES {
-        let reply = send(&packet(0x18, 0))?;
-        let busy = reply.iter().all(|&b| b == 0) || reply[..4] == [4, 0x18, 0, 0xff];
-        if busy {
-            std::thread::sleep(START_RETRY_DELAY);
-            continue;
-        }
-        return validate_ack(&reply, 0x18);
-    }
-    validate_ack(&send(&packet(0x18, 0))?, 0x18)
-}
-
-/// Runs one START..END session; END is sent even after a failure.
-fn session(
-    send: &mut impl FnMut(&[u8; 64]) -> Result<[u8; 64]>,
-    body: impl FnOnce(&mut dyn FnMut(&[u8; 64]) -> Result<[u8; 64]>) -> Result<()>,
-) -> Result<()> {
-    let result = body(send);
-    let finished = send(&packet(0xf0, 0)).and_then(|r| validate_ack(&r, 0xf0));
-    result.and(finished)
-}
-
-fn select_with(mut send: impl FnMut(&[u8; 64]) -> Result<[u8; 64]>, brightness: u8) -> Result<()> {
+fn mode_packet(brightness: u8) -> Result<[u8; 64]> {
     if brightness > 5 {
         return Err(Error::OutOfRange {
             field: "custom RGB brightness",
@@ -199,43 +129,34 @@ fn select_with(mut send: impl FnMut(&[u8; 64]) -> Result<[u8; 64]>, brightness: 
     mode[0] = 0x80;
     mode[9] = brightness;
     mode[14..16].copy_from_slice(&[0xaa, 0x55]);
-    session(&mut send, |send| {
-        start(send)?;
-        validate_ack(&send(&packet(0x13, 1))?, 0x13)?;
-        send(&mode)?;
-        validate_ack(&send(&packet(2, 0))?, 2)
-    })
+    Ok(mode)
 }
 
-fn bank_with(
-    mut send: impl FnMut(&[u8; 64]) -> Result<[u8; 64]>,
-    map: &CustomLedMap,
-) -> Result<()> {
+/// Mode 80 with the stored colour bank. Brightness is 0-5.
+pub(crate) fn select_custom(device: &HidDevice, pid: u16, brightness: u8) -> Result<()> {
+    let mode = mode_packet(brightness)?;
+    let _guard = TransactionLock::acquire(pid)?;
+    select_with(&mut |p| exchange(device, p), mode)
+}
+
+/// Replace the stored colour bank without changing the active mode.
+pub(crate) fn write_bank(device: &HidDevice, pid: u16, map: &CustomLedMap) -> Result<()> {
     let data = encode(map)?;
-    session(&mut send, |send| {
-        start(send)?;
-        validate_ack(&send(&packet(0x23, 9))?, 0x23)?;
-        for bytes in data.chunks_exact(64) {
-            let p: &[u8; 64] = bytes.try_into().unwrap();
-            // Data replies echo raw colour bytes; only command ACKs carry
-            // a status field. Requiring command-shaped data ACKs is wrong.
-            send(p)?;
-        }
-        validate_ack(&send(&packet(2, 0))?, 2)
-    })
+    let _guard = TransactionLock::acquire(pid)?;
+    bank_with(&mut |p| exchange(device, p), &data)
 }
 
-/// Both sessions in vendor order; covers the full transaction in tests.
-#[cfg(test)]
-fn apply_with(
-    mut send: impl FnMut(&[u8; 64]) -> Result<[u8; 64]>,
-    map: &CustomLedMap,
-    brightness: u8,
-) -> Result<()> {
-    // Validate both inputs before the first session reaches hardware.
-    encode(map)?;
-    select_with(&mut send, brightness)?;
-    bank_with(&mut send, map)
+fn select_with(send: &mut Send, mode: [u8; 64]) -> Result<()> {
+    transaction(send, control_packet(0x13, 0, 1), &mut std::iter::once(mode))
+}
+
+/// Nine raw 64-byte blocks; their replies echo colour bytes only.
+fn bank_with(send: &mut Send, data: &[u8; 576]) -> Result<()> {
+    transaction(
+        send,
+        control_packet(0x23, 0, 9),
+        &mut data.chunks_exact(64).map(|b| b.try_into().unwrap()),
+    )
 }
 
 #[cfg(test)]
@@ -269,79 +190,72 @@ mod tests {
         assert_eq!(source.len(), 81);
         assert_eq!(target.len(), 81);
     }
-    #[test]
-    fn full_write_uses_two_sessions_and_nine_unframed_blocks() {
-        let m = CustomLedMap::default();
-        let mut packets = Vec::new();
-        apply_with(
-            |p| {
-                packets.push(*p);
-                let mut r = *p;
-                r[3] = 1;
-                Ok(r)
-            },
-            &m,
-            5,
-        )
-        .unwrap();
-        assert_eq!(packets.len(), 18);
-        assert_eq!(packets[2][0], 0x80);
-        assert_eq!(packets[2][9], 5);
-        assert_eq!(packets[6], packet(0x23, 9));
-        let body: Vec<_> = packets[7..16]
-            .iter()
-            .flat_map(|p| p.iter().copied())
-            .collect();
-        assert_eq!(body, encode(&m).unwrap());
-        assert_eq!(packets[16], packet(2, 0));
-        assert_eq!(packets[17], packet(0xf0, 0));
-    }
-    #[test]
-    fn busy_start_is_retried_then_the_session_continues() {
-        let mut busy = 2;
-        let mut packets = Vec::new();
-        select_with(
-            |p| {
-                packets.push(*p);
-                let mut r = *p;
-                r[3] = if p[1] == 0x18 && busy > 0 {
-                    busy -= 1;
-                    0xff
-                } else {
-                    1
-                };
-                Ok(r)
-            },
-            3,
-        )
-        .unwrap();
-        assert_eq!(packets.iter().filter(|p| **p == packet(0x18, 0)).count(), 3);
-        assert_eq!(packets.last().unwrap(), &packet(0xf0, 0));
+    fn ack(p: &[u8; 64]) -> Result<[u8; 64]> {
+        let mut r = *p;
+        r[3] = 1;
+        Ok(r)
     }
 
     #[test]
-    fn rejects_malformed_maps_before_hardware_and_never_commits_failed_bank() {
+    fn mode_and_bank_sessions_match_the_vendor_sequence() {
+        let mut packets = Vec::new();
+        select_with(
+            &mut |p| {
+                packets.push(*p);
+                ack(p)
+            },
+            mode_packet(5).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(packets.len(), 5);
+        assert_eq!(packets[1], control_packet(0x13, 0, 1));
+        assert_eq!((packets[2][0], packets[2][9]), (0x80, 5));
+        assert_eq!(packets[3], control_packet(2, 0, 0));
+        assert_eq!(packets[4], control_packet(0xf0, 0, 1));
+
+        let data = encode(&CustomLedMap::default()).unwrap();
+        let mut packets = Vec::new();
+        bank_with(
+            &mut |p| {
+                packets.push(*p);
+                ack(p)
+            },
+            &data,
+        )
+        .unwrap();
+        assert_eq!(packets.len(), 13);
+        assert_eq!(packets[1], control_packet(0x23, 0, 9));
+        let body: Vec<_> = packets[2..11]
+            .iter()
+            .flat_map(|p| p.iter().copied())
+            .collect();
+        assert_eq!(body, data);
+        assert_eq!(packets[11], control_packet(2, 0, 0));
+        assert_eq!(packets[12], control_packet(0xf0, 0, 1));
+    }
+
+    #[test]
+    fn rejects_bad_input_before_hardware_and_never_saves_a_failed_bank() {
         let mut m = CustomLedMap::default();
         m.leds.pop();
-        assert!(apply_with(|_| panic!("invalid map reached hardware"), &m, 5).is_err());
+        assert!(encode(&m).is_err());
+        assert!(mode_packet(6).is_err());
+        let data = encode(&CustomLedMap::default()).unwrap();
         let mut count = 0;
         let mut packets = Vec::new();
-        let result = apply_with(
-            |p| {
+        let result = bank_with(
+            &mut |p| {
                 packets.push(*p);
                 count += 1;
-                if count == 10 {
+                if count == 5 {
                     return Err(Error::UnexpectedResponse("unplugged".into()));
                 }
-                let mut r = *p;
-                r[3] = 1;
-                Ok(r)
+                ack(p)
             },
-            &CustomLedMap::default(),
-            5,
+            &data,
         );
         assert!(result.is_err());
-        assert_eq!(packets.last().unwrap(), &packet(0xf0, 0));
-        assert_eq!(packets.iter().filter(|p| **p == packet(2, 0)).count(), 1); // mode commit only
+        assert_eq!(packets.last().unwrap(), &control_packet(0xf0, 0, 1));
+        assert!(!packets.contains(&control_packet(2, 0, 0)));
     }
 }

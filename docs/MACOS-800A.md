@@ -133,12 +133,28 @@ stored bank) and `set_custom_led` the second, so the app's paint view and
 The firmware has no bank read-back; the app shows the last map it wrote.
 Each write is saved, so audio-reactive streaming stays disabled.
 
-Busy window, observed on this keyboard: the effect transaction above
-(START, 13, data, END without SAVE) gets status FF on END, and for about
-2 s START answers FF or an all-zero report. After a session closed with
-SAVE and END, START is accepted at once. The RGB sessions retry START for
-up to 3 s; effect writes keep their framing so smart lighting does not
-save to the keyboard on every change.
+## Feature transactions
+
+Every setting (effect, sleep, clock, custom mode, colour bank) is one
+session: START (04 18), the command preamble, its data packets, SAVE
+(04 02, flag 0), END (04 F0). Command replies must echo `04 <command>`
+with status 1 in byte 3; data replies echo their bytes and are not checked.
+END is sent after a failure too.
+
+Measured on this keyboard: without SAVE, END answers FF and for about 2 s
+START, the preamble and any data are refused (status FF or an all-zero
+report). Earlier builds wrote effects that way, so quick successive
+changes (smart-lighting flashes, app switches, Teams) could be dropped, and
+an image upload right after an effect lost its first block ("No
+acknowledgement for TFT chunk 1"). With SAVE, back-to-back writes all
+return 01 and take about 0.3 s. START still waits up to 3 s for a keyboard
+left busy by another program.
+
+The image upload checks every command status, waits for a busy START the
+same way, and sends END after a failed transfer. The cross-process
+transaction lock now waits up to 12 s (a 49-block upload takes about 8 s)
+instead of failing at once, so a lighting change during an upload is
+applied after it rather than dropped.
 
 The Lighting view keeps named colour profiles (`colour-profiles.json` in
 the app data folder): save the current paint, apply, delete, import and

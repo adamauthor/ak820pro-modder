@@ -6,7 +6,7 @@ use ak820_protocol::commands::per_key_rgb::{CustomLedMap, LED_COUNT};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-const FILE: &str = "colour-profiles.json";
+pub const FILE: &str = "colour-profiles.json";
 const EXPORT_FORMAT: &str = "ak820-colour-profiles/1";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +70,21 @@ impl Store {
         match self.profiles.iter_mut().find(|p| p.name == name) {
             Some(existing) => existing.map = map,
             None => self.profiles.push(ColourProfile { name, map }),
+        }
+        Ok(())
+    }
+
+    /// Checks a store read from a settings bundle before it is written.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.profiles.len() > 100 {
+            return Err("At most 100 colour profiles".into());
+        }
+        for p in &self.profiles {
+            clean_name(&p.name)?;
+            validate_map(&p.map)?;
+        }
+        if let Some(map) = &self.current {
+            validate_map(map)?;
         }
         Ok(())
     }

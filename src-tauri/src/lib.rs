@@ -709,7 +709,10 @@ fn remember_custom_led(app: &AppHandle, map: CustomLedMap, active: Option<String
 
 /// Writes a saved profile and switches the keyboard to custom mode, keeping
 /// the brightness of the user's own lighting.
-async fn apply_colour_profile(app: &AppHandle, name: Option<&str>) -> Result<String, AppError> {
+pub(crate) async fn apply_colour_profile(
+    app: &AppHandle,
+    name: Option<&str>,
+) -> Result<String, AppError> {
     let dir = data_dir(app)?;
     let store = colour_profiles::load(&dir);
     let profile = match name {
@@ -757,7 +760,15 @@ async fn apply_colour_profile(app: &AppHandle, name: Option<&str>) -> Result<Str
     remember_custom_led(app, profile.map, Some(profile.name.clone()));
     restore_tft_quietly(app.state::<Arc<TftMemory>>().inner().clone()).await;
     let _ = app.emit("colour-profile-applied", &profile.name);
+    refresh_colour_menu(app).await;
     Ok(profile.name)
+}
+
+/// The menu bar lists saved colour profiles; keep it in step with changes.
+async fn refresh_colour_menu(app: &AppHandle) {
+    if let Some(smart) = app.try_state::<Arc<Smart>>() {
+        smart.push_menu().await;
+    }
 }
 
 #[tauri::command]
@@ -766,20 +777,28 @@ fn colour_profiles_get(app: AppHandle) -> Result<colour_profiles::Store, AppErro
 }
 
 #[tauri::command]
-fn colour_profile_save(app: AppHandle, name: String, map: CustomLedMap) -> Result<(), AppError> {
+async fn colour_profile_save(
+    app: AppHandle,
+    name: String,
+    map: CustomLedMap,
+) -> Result<(), AppError> {
     let dir = data_dir(&app)?;
     let mut store = colour_profiles::load(&dir);
     store.upsert(&name, map).map_err(AppError::Protocol)?;
     store.active = Some(name.trim().to_string());
-    colour_profiles::save(&dir, &store).map_err(AppError::Protocol)
+    colour_profiles::save(&dir, &store).map_err(AppError::Protocol)?;
+    refresh_colour_menu(&app).await;
+    Ok(())
 }
 
 #[tauri::command]
-fn colour_profile_delete(app: AppHandle, name: String) -> Result<(), AppError> {
+async fn colour_profile_delete(app: AppHandle, name: String) -> Result<(), AppError> {
     let dir = data_dir(&app)?;
     let mut store = colour_profiles::load(&dir);
     store.remove(&name);
-    colour_profiles::save(&dir, &store).map_err(AppError::Protocol)
+    colour_profiles::save(&dir, &store).map_err(AppError::Protocol)?;
+    refresh_colour_menu(&app).await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -800,7 +819,7 @@ fn colour_profiles_export(
 }
 
 #[tauri::command]
-fn colour_profiles_import(app: AppHandle, path: String) -> Result<Vec<String>, AppError> {
+async fn colour_profiles_import(app: AppHandle, path: String) -> Result<Vec<String>, AppError> {
     let meta = std::fs::metadata(&path).map_err(|e| AppError::Protocol(e.to_string()))?;
     if meta.len() > 2 * 1024 * 1024 {
         return Err(AppError::Protocol(
@@ -812,6 +831,7 @@ fn colour_profiles_import(app: AppHandle, path: String) -> Result<Vec<String>, A
     let mut store = colour_profiles::load(&dir);
     let names = store.import_json(&text).map_err(AppError::Protocol)?;
     colour_profiles::save(&dir, &store).map_err(AppError::Protocol)?;
+    refresh_colour_menu(&app).await;
     Ok(names)
 }
 

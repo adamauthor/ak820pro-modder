@@ -12,7 +12,7 @@ pub const VERSION: u32 = 1;
 pub const ICLOUD_NAME: &str = "settings-bundle.json";
 
 /// Settings files included in a bundle.
-pub const FILES: [&str; 7] = [
+pub const FILES: [&str; 8] = [
     "mac-controls.json",
     "host-macros.json",
     "automations.json",
@@ -20,6 +20,7 @@ pub const FILES: [&str; 7] = [
     crate::smart_lighting::BASE_FILE,
     crate::pomodoro::CONFIG_FILE,
     crate::anime_screen::CONFIG_FILE,
+    crate::colour_profiles::FILE,
 ];
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -74,6 +75,9 @@ pub fn validate(bundle: &Bundle) -> Result<(), String> {
             }
             crate::anime_screen::CONFIG_FILE => {
                 check::<crate::anime_screen::AnimeConfig>(name, value)?.validate()?
+            }
+            crate::colour_profiles::FILE => {
+                check::<crate::colour_profiles::Store>(name, value)?.validate()?
             }
             other => return Err(format!("Unknown file in settings bundle: {other}")),
         }

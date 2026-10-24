@@ -209,6 +209,11 @@ impl Smart {
                 _ => return Err("Unknown test".into()),
             },
             "anime" => self.anime_upload(value).await?,
+            "colour_profile" => {
+                crate::apply_colour_profile(&self.app, Some(value))
+                    .await
+                    .map_err(|e| format!("{e:?}"))?;
+            }
             _ => {}
         }
         Ok(())
@@ -666,6 +671,12 @@ impl Smart {
             (timer.snapshot(), timer.label())
         };
         let config = self.lighting.config().await;
+        let colours = self
+            .app
+            .path()
+            .app_data_dir()
+            .map(|dir| crate::colour_profiles::load(&dir))
+            .unwrap_or_default();
         let status = self.status.lock().await;
         let russian = status.language == "ru";
         let pomodoro_state = match (snapshot.phase, snapshot.paused) {
@@ -689,6 +700,8 @@ impl Smart {
             "smart": {"teams": config.teams_enabled, "telegram": config.telegram_enabled, "apps": config.apps_enabled},
             "usb": smart_lighting::usb_connected(),
             "language": status.language,
+            "colour_profiles": colours.profiles.iter().map(|p| &p.name).collect::<Vec<_>>(),
+            "colour_active": colours.active,
         });
         drop(status);
         let _ = mac_controls::request(

@@ -334,7 +334,15 @@ final class NativeControls: NSObject, NSMenuDelegate {
         let usb = menuState["usb"] as? Bool == true
         let lighting = [("off", tr("Off", "Выключить")), ("white", tr("White", "Белый")), ("warm", tr("Warm", "Тёплый")), ("rainbow", tr("Rainbow", "Радуга")),
                         ("breath", tr("Breathing", "Дыхание")), ("restore", tr("My lighting", "Моя подсветка"))]
-        menu.addItem(submenu(tr("Lighting", "Подсветка") + (usb ? "" : tr(" (USB)", " (USB)")), lighting.map { item($0.1, ["event": "menu", "command": "lighting", "value": $0.0], enabled: usb) }))
+        var lightingItems = lighting.map { item($0.1, ["event": "menu", "command": "lighting", "value": $0.0], enabled: usb) }
+        let colourProfiles = menuState["colour_profiles"] as? [String] ?? []
+        if !colourProfiles.isEmpty {
+            let active = menuState["colour_active"] as? String
+            lightingItems.append(.separator())
+            lightingItems.append(item(tr("Colour profiles", "Цветовые профили"), enabled: false))
+            lightingItems += colourProfiles.map { item($0, ["event": "menu", "command": "colour_profile", "value": $0], checked: $0 == active, enabled: usb) }
+        }
+        menu.addItem(submenu(tr("Lighting", "Подсветка") + (usb ? "" : tr(" (USB)", " (USB)")), lightingItems))
         let smart = menuState["smart"] as? [String: Bool] ?? [:]
         menu.addItem(submenu(tr("Smart lighting", "Умная подсветка"), [
             item(tr("Teams calls", "Звонки Teams"), ["event": "menu", "command": "smart", "value": "teams"], checked: smart["teams"] == true),
