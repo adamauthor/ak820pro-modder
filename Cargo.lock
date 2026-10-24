@@ -19,7 +19,7 @@ dependencies = [
 
 [[package]]
 name = "ak820-anime"
-version = "0.9.3-macos.1"
+version = "0.9.4-macos.1"
 dependencies = [
  "embedded-graphics",
  "image",
@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "ak820-audio-reactive"
-version = "0.9.3-macos.1"
+version = "0.9.4-macos.1"
 dependencies = [
  "realfft",
  "screencapturekit",
@@ -39,7 +39,7 @@ dependencies = [
 
 [[package]]
 name = "ak820-cli"
-version = "0.9.3-macos.1"
+version = "0.9.4-macos.1"
 dependencies = [
  "ak820-anime",
  "ak820-audio-reactive",
@@ -54,7 +54,7 @@ dependencies = [
 
 [[package]]
 name = "ak820-protocol"
-version = "0.9.3-macos.1"
+version = "0.9.4-macos.1"
 dependencies = [
  "fs2",
  "hex",
@@ -69,7 +69,7 @@ dependencies = [
 
 [[package]]
 name = "ak820pro-app"
-version = "0.9.3-macos.1"
+version = "0.9.4-macos.1"
 dependencies = [
  "ak820-anime",
  "ak820-audio-reactive",

@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
-## [Unreleased]
+## [0.9.4-macos.1] — TFT slot 1 and per-key RGB
 
 - TFT uploads on FF13 firmware target custom slot 1 (`04 72 01`) instead of
   slot 3, after vespovios/ak820pro-modder@3264608: on another ANSI 800A,
