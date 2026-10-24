@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [Unreleased]
+
+- TFT uploads on FF13 firmware target custom slot 1 (`04 72 01`) instead of
+  slot 3, after vespovios/ak820pro-modder@3264608: on another ANSI 800A,
+  slot 3 showed a static image only briefly among other animation. Not yet
+  re-checked on this keyboard.
+- Per-key RGB on FF13 firmware (ANSI layout): `ak820 rgb fill` and
+  `ak820 rgb rainbow` write the 576-byte colour bank in two acknowledged
+  sessions. Protocol and slot table ported from vespovios/ak820pro-modder.
+
 ## [0.9.3-macos.1] — Smooth seeking, context screen and new presets
 
 - Seeking: one knob detent is one second, turned as far as you like. Spotify
