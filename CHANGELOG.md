@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it leaves beta.
 
+## [0.9.8-macos.1] — Write only on Apply
+
+- On FF13 keyboards the Lighting view and the per-key paint view no longer
+  apply changes while you adjust them: nothing is sent until you press
+  Apply. Dragging the colour picker or a slider used to write dozens of
+  times, and each write is stored in the keyboard's flash.
+- Hardware finding: lighting written without SAVE also survives a full
+  power-off, so the keyboard saves every lighting change regardless of
+  SAVE. There is no write that stays in RAM only.
+
 ## [0.9.7-macos.1] — Smart features removed
 
 - Removed smart lighting (Teams calls, Telegram flashes, per-app colours),

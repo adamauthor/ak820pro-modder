@@ -40,8 +40,6 @@ interface Props {
 const LED_COUNT = 128;
 const DEFAULT_PAINT = "FFFFFF";
 const APPLY_DEBOUNCE_MS = 120;
-// FF13 saves every bank write (~1 s per write), so batch strokes longer.
-const LEGACY_APPLY_DEBOUNCE_MS = 600;
 
 export function CustomLightingPaint({ inheritedConfig }: Props) {
   const { layout } = useLayout();
@@ -54,7 +52,9 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [lastApplied, setLastApplied] = useState<string | null>(null);
-  const [autoApply, setAutoApply] = useState(true);
+  const [autoApplyChoice, setAutoApply] = useState(true);
+  // FF13 saves every colour-bank write to flash: paint first, then Apply.
+  const autoApply = autoApplyChoice && !legacy;
 
   const inflight = useRef(false);
   const queued = useRef<LedColor[] | null>(null);
@@ -125,7 +125,7 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
     pending.current = window.setTimeout(() => {
       pending.current = null;
       void apply(map);
-    }, legacy ? LEGACY_APPLY_DEBOUNCE_MS : APPLY_DEBOUNCE_MS);
+    }, APPLY_DEBOUNCE_MS);
   }
 
   /* ----- edit ops ---------------------------------------------------- */
@@ -239,13 +239,13 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
         <span className="text-xs text-fg-3">·</span>
         <Button size="sm" variant="ghost" onClick={() => fillAll(paintColor)} disabled={busy}>{" "}{t("Fill all")}{" "}</Button>
         <Button size="sm" variant="ghost" onClick={() => clearAll()} disabled={busy}>{" "}{t("Clear all")}{" "}</Button>
-        <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-fg-2">
+        {!legacy && <label className="ml-auto flex cursor-pointer items-center gap-2 text-xs text-fg-2">
           <input
             type="checkbox"
             checked={autoApply}
             onChange={(e) => setAutoApply(e.target.checked)}
             className="h-3.5 w-3.5 accent-accent-500"
-          />{" "}{t("Auto-apply")}{" "}</label>
+          />{" "}{t("Auto-apply")}{" "}</label>}
       </div>
 
       <PaintSurface
@@ -261,8 +261,8 @@ export function CustomLightingPaint({ inheritedConfig }: Props) {
       {legacy && (
         <p className="mt-3 text-xs text-fg-3">
           {t(
-            "This keyboard cannot report its colours, so the map shown is the last one this app wrote. Colours follow the ANSI LED layout; the ISO key left of Z is not mapped.",
-            "Эта клавиатура не отдаёт свои цвета, поэтому показана последняя раскраска, записанная приложением. Цвета идут по раскладке светодиодов ANSI; ISO-клавиша слева от Z не подсвечивается.",
+            "Paint the keys, then press Apply: every write is saved to the keyboard's memory. It cannot report its colours, so the map shown is the last one this app wrote. Colours follow the ANSI LED layout; the ISO key left of Z is not mapped.",
+            "Раскрасьте клавиши и нажмите «Применить»: каждая запись сохраняется в память клавиатуры. Свои цвета она не отдаёт, поэтому показана последняя раскраска, записанная приложением. Цвета идут по раскладке светодиодов ANSI; ISO-клавиша слева от Z не подсвечивается.",
           )}
         </p>
       )}

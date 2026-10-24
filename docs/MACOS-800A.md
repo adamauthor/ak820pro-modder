@@ -150,6 +150,14 @@ acknowledgement for TFT chunk 1"). With SAVE, back-to-back writes all
 return 01 and take about 0.3 s. START still waits up to 3 s for a keyboard
 left busy by another program.
 
+Persistence, tested: static green with SAVE, then static red without SAVE
+(END answered FF), then a full power-off. The keyboard came back red, so a
+lighting write is stored even without SAVE; there is no RAM-only write.
+Host-driven lighting that changes often (notifications, per-app colours,
+audio-reactive streaming) therefore wears the flash, and so does every
+image upload, which rewrites the stored animation. The app only writes on
+an explicit user action.
+
 The image upload checks every command status, waits for a busy START the
 same way, and sends END after a failed transfer. The cross-process
 transaction lock now waits up to 12 s (a 49-block upload takes about 8 s)

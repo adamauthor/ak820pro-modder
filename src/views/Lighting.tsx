@@ -27,7 +27,10 @@ export function Lighting() {
   });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [autoApply, setAutoApply] = useState(true);
+  const [autoApplyChoice, setAutoApply] = useState(true);
+  // FF13 keyboards save every lighting write to flash: dragging a slider
+  // or the colour picker would write dozens of times, so only Apply writes.
+  const autoApply = autoApplyChoice && !legacy;
   const [lastApplied, setLastApplied] = useState<string | null>(null);
 
   // Audio-reactive lighting (macOS only) — currently **alpha**: the
@@ -196,12 +199,14 @@ export function Lighting() {
         description={
           isCustomMode
             ? "Per-key custom RGB — click any key on the layout below to paint it."
-            : "Per-keyboard global effects. Changes apply immediately when auto-apply is on."
+            : legacy
+              ? t("Pick an effect and press Apply. This keyboard saves every change to its memory, so changes are not sent while you adjust.", "Выберите эффект и нажмите «Применить». Клавиатура сохраняет каждое изменение в память, поэтому пока вы настраиваете, ничего не отправляется.")
+              : "Per-keyboard global effects. Changes apply immediately when auto-apply is on."
         }
         action={
           isCustomMode ? null : (
             <div className="flex items-center gap-4">
-              <Toggle checked={autoApply} onChange={setAutoApply}>{" "}{t("Auto-apply")}{" "}</Toggle>
+              {!legacy && <Toggle checked={autoApply} onChange={setAutoApply}>{" "}{t("Auto-apply")}{" "}</Toggle>}
               <Button variant="primary" onClick={() => void applyNow(cfg)} disabled={busy}>
                 {busy ? "Sending…" : "Apply"}
               </Button>
